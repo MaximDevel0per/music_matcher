@@ -5,7 +5,7 @@ const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
 const GRID_FREQS = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
 const GRID_LABELS = { 100: "100", 1000: "1k", 10000: "10k" };
-const PLOT_H = 180;
+const PLOT_H = 240;
 const LABEL_H = 16;
 const DIFF_RANGE_DB = 15; // Y-Achse der Differenzansicht: ±15 dB
 
@@ -13,6 +13,7 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const [mode, setMode] = useState("live");
+  const [open, setOpen] = useState(true);
   // Letzte FFT-Daten bleiben erhalten, damit das Bild bei Pause,
   // Resize oder A/B-Umschalten nicht auf Null zurückfällt.
   const dataRef = useRef({ a: null, b: null });
@@ -104,15 +105,25 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
 
         ctx.beginPath();
         ctx.moveTo(0, plotH);
-        for (let x = 0; x <= w; x += 2) {
+        for (let x = 0; x <= w; x++) {
           const f0 = freqForX(x);
-          const f1 = freqForX(x + 2);
-          let i0 = Math.floor(f0 / binHz);
-          let i1 = Math.max(i0 + 1, Math.ceil(f1 / binHz));
-          i0 = Math.min(Math.max(i0, 0), data.length - 1);
-          i1 = Math.min(i1, data.length);
-          let db = -Infinity;
-          for (let i = i0; i < i1; i++) if (data[i] > db) db = data[i];
+          const f1 = freqForX(x + 1);
+          const b0 = f0 / binHz;
+          let i0 = Math.floor(b0);
+          let i1 = Math.ceil(f1 / binHz);
+          let db;
+          if (i1 - i0 <= 1) {
+            // Pixel liegt innerhalb eines Bins: linear interpolieren,
+            // sonst entstehen im Bass sichtbare Treppenstufen
+            const i = Math.min(Math.max(i0, 0), data.length - 2);
+            const frac = Math.min(1, Math.max(0, b0 - i));
+            db = data[i] * (1 - frac) + data[i + 1] * frac;
+          } else {
+            i0 = Math.min(Math.max(i0, 0), data.length - 1);
+            i1 = Math.min(i1, data.length);
+            db = -Infinity;
+            for (let i = i0; i < i1; i++) if (data[i] > db) db = data[i];
+          }
           ctx.lineTo(x, yForDb(db));
         }
         ctx.lineTo(w, plotH);
@@ -184,7 +195,7 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
       }
       // Leichte Glättung über die Frequenzachse gegen FFT-Zappeln
       const smooth = new Float32Array(w + 1);
-      const R = 4;
+      const R = 2;
       for (let x = 0; x <= w; x++) {
         let s = 0, n = 0;
         for (let k = Math.max(0, x - R); k <= Math.min(w, x + R); k++) { s += raw[k]; n++; }
@@ -245,7 +256,9 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [draw, isPlaying, mode]);
+    // `open` als Dependency: nach dem Aufklappen wird der neu
+    // eingehängte Canvas sofort einmal gezeichnet.
+  }, [draw, isPlaying, mode, open]);
 
   useEffect(() => {
     window.addEventListener("resize", draw);
@@ -286,44 +299,55 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
   };
 
   return (
-    <div className="abc-spectrum-box">
+    <div className={`abc-spectrum-box ${open ? "" : "collapsed"}`}>
       <div className="abc-spectrum-head">
-        <div className="abc-spectrum-title">Frequency Spectrum</div>
-        <div className="abc-spectrum-tools">
-          <div className="abc-spec-toggle">
-            <button className={mode === "live" ? "on" : ""} onClick={() => setMode("live")}>Live</button>
-            <button className={mode === "diff" ? "on" : ""} onClick={() => setMode("diff")}>Difference A−B</button>
+        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
+          Frequency Spectrum
+        </button>
+        {open ? (
+          <div className="abc-spectrum-tools">
+            <div className="abc-spec-toggle">
+              <button className={mode === "live" ? "on" : ""} onClick={() => setMode("live")}>Live</button>
+              <button className={mode === "diff" ? "on" : ""} onClick={() => setMode("diff")}>Difference A−B</button>
+            </div>
+            {mode === "live" ? (
+              <div className="abc-spectrum-legend">
+                <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
+                  <span className="dot" style={{ background: "#f2a93b" }} />A · Mix
+                </span>
+                <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
+                  <span className="dot" style={{ background: "#5fbfb3" }} />B · Reference
+                </span>
+              </div>
+            ) : (
+              <div className="abc-spectrum-legend">
+                <span>Avg. spectrum, loudness-matched</span>
+              </div>
+            )}
           </div>
-          {mode === "live" ? (
-            <div className="abc-spectrum-legend">
-              <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
-                <span className="dot" style={{ background: "#f2a93b" }} />A · Mix
-              </span>
-              <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
-                <span className="dot" style={{ background: "#5fbfb3" }} />B · Reference
-              </span>
-            </div>
-          ) : (
-            <div className="abc-spectrum-legend">
-              <span>Avg. spectrum, loudness-matched</span>
-            </div>
-          )}
-        </div>
+        ) : (
+          <div className="abc-meta-hint">Click to expand</div>
+        )}
       </div>
-      <canvas
-        ref={canvasRef}
-        height={PLOT_H}
-        className="abc-spec-canvas"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-      />
-      <div className="abc-eq-hint">
-        {filterBand
-          ? `Frequency focus ${formatHz(filterBand.low)} – ${formatHz(filterBand.high)}: only this range is audible. Click the spectrum to reset.`
-          : "Drag across the spectrum to hear only a frequency range of both tracks."}
-      </div>
+      {open && (
+        <>
+          <canvas
+            ref={canvasRef}
+            height={PLOT_H}
+            className="abc-spec-canvas"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          />
+          <div className="abc-eq-hint">
+            {filterBand
+              ? `Frequency focus ${formatHz(filterBand.low)} – ${formatHz(filterBand.high)}: only this range is audible. Click the spectrum to reset.`
+              : "Drag across the spectrum to hear only a frequency range of both tracks."}
+          </div>
+        </>
+      )}
     </div>
   );
 }

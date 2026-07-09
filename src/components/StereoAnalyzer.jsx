@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from "react";
 import { formatHz } from "../lib/format.js";
 
-const PLOT_H = 220;
+const PLOT_H = 280;
 const COLORS = { a: "#f2a93b", b: "#5fbfb3" };
 
 /**
@@ -15,6 +15,7 @@ export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filte
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const [mode, setMode] = useState("gonio");
+  const [open, setOpen] = useState(true);
   // Letzte Sample-Blöcke und geglättete Werte überleben Pause/Umschalten
   const blocksRef = useRef({ a: null, b: null });
   const corrRef = useRef({ a: null, b: null });
@@ -270,7 +271,9 @@ export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filte
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [draw, isPlaying]);
+    // `open` als Dependency: nach dem Aufklappen wird der neu
+    // eingehängte Canvas sofort einmal gezeichnet.
+  }, [draw, isPlaying, open]);
 
   useEffect(() => {
     window.addEventListener("resize", draw);
@@ -278,28 +281,33 @@ export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filte
   }, [draw]);
 
   return (
-    <div className="abc-spectrum-box">
+    <div className={`abc-spectrum-box ${open ? "" : "collapsed"}`}>
       <div className="abc-spectrum-head">
-        <div className="abc-spectrum-title">
+        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
           Stereo Image{filterBand ? ` · ${formatHz(filterBand.low)} – ${formatHz(filterBand.high)}` : ""}
-        </div>
-        <div className="abc-spectrum-tools">
-          <div className="abc-spec-toggle">
-            <button className={mode === "gonio" ? "on" : ""} onClick={() => setMode("gonio")}>Dots</button>
-            <button className={mode === "lissajous" ? "on" : ""} onClick={() => setMode("lissajous")}>Lines</button>
-            <button className={mode === "ms" ? "on" : ""} onClick={() => setMode("ms")}>Width</button>
+        </button>
+        {open ? (
+          <div className="abc-spectrum-tools">
+            <div className="abc-spec-toggle">
+              <button className={mode === "gonio" ? "on" : ""} onClick={() => setMode("gonio")}>Dots</button>
+              <button className={mode === "lissajous" ? "on" : ""} onClick={() => setMode("lissajous")}>Lines</button>
+              <button className={mode === "ms" ? "on" : ""} onClick={() => setMode("ms")}>Width</button>
+            </div>
+            <div className="abc-spectrum-legend">
+              <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
+                <span className="dot" style={{ background: COLORS.a }} />A · Mix
+              </span>
+              <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
+                <span className="dot" style={{ background: COLORS.b }} />B · Reference
+              </span>
+            </div>
           </div>
-          <div className="abc-spectrum-legend">
-            <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
-              <span className="dot" style={{ background: COLORS.a }} />A · Mix
-            </span>
-            <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
-              <span className="dot" style={{ background: COLORS.b }} />B · Reference
-            </span>
-          </div>
-        </div>
+        ) : (
+          <div className="abc-meta-hint">Click to expand</div>
+        )}
       </div>
-      <canvas ref={canvasRef} height={PLOT_H} />
+      {open && <canvas ref={canvasRef} height={PLOT_H} />}
     </div>
   );
 }

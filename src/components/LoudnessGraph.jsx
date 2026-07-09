@@ -1,6 +1,6 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, useState } from "react";
 
-const PLOT_H = 130;
+const PLOT_H = 170;
 
 /**
  * Short-Term-Loudness (3-s-Fenster) beider Tracks über die Zeit,
@@ -10,6 +10,7 @@ const PLOT_H = 130;
  */
 export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, active, subscribeFrame, getCurrentOffset, onSeek }) {
   const canvasRef = useRef(null);
+  const [open, setOpen] = useState(true);
 
   const draw = useCallback((offset) => {
     const canvas = canvasRef.current;
@@ -93,7 +94,9 @@ export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, ac
   useEffect(() => {
     draw(getCurrentOffset());
     return subscribeFrame(draw);
-  }, [draw, subscribeFrame, getCurrentOffset]);
+    // `open` als Dependency: nach dem Aufklappen wird der neu
+    // eingehängte Canvas sofort einmal gezeichnet.
+  }, [draw, subscribeFrame, getCurrentOffset, open]);
 
   useEffect(() => {
     const handleResize = () => draw(getCurrentOffset());
@@ -108,20 +111,29 @@ export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, ac
   };
 
   return (
-    <div className="abc-spectrum-box">
+    <div className={`abc-spectrum-box ${open ? "" : "collapsed"}`}>
       <div className="abc-spectrum-head">
-        <div className="abc-spectrum-title">Loudness Over Time</div>
-        <div className="abc-spectrum-legend">
-          <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
-            <span className="dot" style={{ background: "#f2a93b" }} />A · Mix
-          </span>
-          <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
-            <span className="dot" style={{ background: "#5fbfb3" }} />B · Reference
-          </span>
-          <span>Short-term (3 s), matched</span>
-        </div>
+        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
+          Loudness Over Time
+        </button>
+        {open ? (
+          <div className="abc-spectrum-legend">
+            <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
+              <span className="dot" style={{ background: "#f2a93b" }} />A · Mix
+            </span>
+            <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
+              <span className="dot" style={{ background: "#5fbfb3" }} />B · Reference
+            </span>
+            <span>Short-term (3 s), matched</span>
+          </div>
+        ) : (
+          <div className="abc-meta-hint">Click to expand</div>
+        )}
       </div>
-      <canvas ref={canvasRef} height={PLOT_H} onClick={handleClick} style={{ cursor: "pointer" }} />
+      {open && (
+        <canvas ref={canvasRef} height={PLOT_H} onClick={handleClick} style={{ cursor: "pointer" }} />
+      )}
     </div>
   );
 }

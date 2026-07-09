@@ -165,7 +165,7 @@ export function detectKey(mono, sampleRate) {
  * der Vergleich zweier Spektren, konstante Offsets kürzen sich heraus.
  */
 export function computeAverageSpectrum(mono, sampleRate) {
-  const N = 8192;
+  const N = 16384;
   if (mono.length < N) return null;
   const hann = new Float32Array(N);
   for (let i = 0; i < N; i++) hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));

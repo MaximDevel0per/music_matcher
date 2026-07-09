@@ -25,6 +25,10 @@ export function useABCompare() {
   const [loopRegion, setLoopRegionState] = useState(null);
   // Frequenz-Fokus: null = volles Spektrum, sonst { low, high } in Hz
   const [filterBand, setFilterBandState] = useState(null);
+  // Drop-Regionen pro Track. Sind BEIDE gesetzt, loopt jeder Track seine
+  // eigene Region ("Drop-Modus") — so vergleicht man Drop gegen Drop,
+  // auch wenn sie an unterschiedlichen Song-Positionen liegen.
+  const [dropRegions, setDropRegionsState] = useState({ a: null, b: null });
 
   // Alles, was sich pro Audio-Frame ändern würde (Playhead-Position),
   // geht NICHT durch React State — das wären 60 Re-Renders/Sekunde.
@@ -43,6 +47,9 @@ export function useABCompare() {
   // Loop-Region auch als Ref, damit rAF-Loop und Offset-Berechnung
   // ohne Re-Render darauf zugreifen können.
   const loopRef = useRef(null);
+  const dropRef = useRef({ a: null, b: null });
+  // Im Drop-Modus sind startOffset/pausedOffset eine PHASE (Sekunden seit
+  // Regionsstart), sonst eine absolute Song-Position.
   const playStateRef = useRef({ startCtxTime: 0, startOffset: 0, pausedOffset: 0 });
   const rafRef = useRef(null);
 
@@ -102,8 +109,10 @@ export function useABCompare() {
     // stummgeschalteten Track das volle Spektrum.
     const makeAnalyser = () => {
       const an = ctx.createAnalyser();
-      an.fftSize = 4096;
-      an.smoothingTimeConstant = 0.85;
+      // 16k-FFT: ~2,7 Hz pro Bin (bei 44,1 kHz) — löst auch den Bassbereich
+      // der logarithmischen Anzeige sauber auf
+      an.fftSize = 16384;
+      an.smoothingTimeConstant = 0.8;
       an.minDecibels = -90;
       an.maxDecibels = -10;
       return an;
@@ -205,10 +214,21 @@ export function useABCompare() {
     srcBRef.current = null;
   }, []);
 
-  const getCurrentOffset = useCallback(() => {
+  // Roher Fortschritt seit Start: Phase (Drop-Modus) bzw. absolute Position
+  const rawProgress = useCallback(() => {
     if (!isPlaying) return playStateRef.current.pausedOffset;
     const ctx = getCtx();
-    const raw = playStateRef.current.startOffset + (ctx.currentTime - playStateRef.current.startCtxTime);
+    return playStateRef.current.startOffset + (ctx.currentTime - playStateRef.current.startCtxTime);
+  }, [isPlaying, getCtx]);
+
+  const getCurrentOffset = useCallback(() => {
+    const raw = rawProgress();
+    const drops = dropRef.current;
+    if (drops.a && drops.b) {
+      // Drop-Modus: Phase auf die Region des aktiven Tracks abbilden
+      const r = active === "A" ? drops.a : drops.b;
+      return r.start + (raw % (r.end - r.start));
+    }
     // Bei aktivem Loop springt die BufferSource nativ von loopEnd auf
     // loopStart zurück — die lineare Zeitrechnung muss das nachvollziehen.
     const loop = loopRef.current;
@@ -216,7 +236,7 @@ export function useABCompare() {
       return loop.start + ((raw - loop.end) % (loop.end - loop.start));
     }
     return raw;
-  }, [isPlaying, getCtx]);
+  }, [rawProgress, active]);
 
   const loopFrame = useCallback(() => {
     const offset = getCurrentOffset();
@@ -244,20 +264,33 @@ export function useABCompare() {
     srcB.connect(analyserBRef.current);
     srcB.connect(stereoBRef.current.input);
 
-    // Natives Looping der BufferSources: sample-genau und ohne Lücke.
-    const loop = loopRef.current;
-    if (loop) {
-      if (offset < loop.start || offset >= loop.end) offset = loop.start;
-      [srcA, srcB].forEach((s) => {
-        s.loop = true;
-        s.loopStart = loop.start;
-        s.loopEnd = loop.end;
-      });
-    }
-
     const when = ctx.currentTime + 0.06;
-    srcA.start(when, offset);
-    srcB.start(when, offset);
+    const drops = dropRef.current;
+    if (drops.a && drops.b) {
+      // Drop-Modus: jeder Track loopt nativ seine eigene Region;
+      // `offset` ist hier eine gemeinsame Phase ab Regionsstart.
+      const phase = Math.max(0, offset);
+      [[srcA, drops.a], [srcB, drops.b]].forEach(([s, r]) => {
+        s.loop = true;
+        s.loopStart = r.start;
+        s.loopEnd = r.end;
+        s.start(when, r.start + (phase % (r.end - r.start)));
+      });
+      offset = phase;
+    } else {
+      // Natives Looping der BufferSources: sample-genau und ohne Lücke.
+      const loop = loopRef.current;
+      if (loop) {
+        if (offset < loop.start || offset >= loop.end) offset = loop.start;
+        [srcA, srcB].forEach((s) => {
+          s.loop = true;
+          s.loopStart = loop.start;
+          s.loopEnd = loop.end;
+        });
+      }
+      srcA.start(when, offset);
+      srcB.start(when, offset);
+    }
     srcARef.current = srcA;
     srcBRef.current = srcB;
     playStateRef.current.startCtxTime = when;
@@ -267,18 +300,37 @@ export function useABCompare() {
   }, [bufferA, bufferB, getCtx, stopSources, loopFrame]);
 
   const pause = useCallback(() => {
-    playStateRef.current.pausedOffset = getCurrentOffset();
+    const drops = dropRef.current;
+    // Im Drop-Modus die Phase sichern, sonst die absolute Position
+    playStateRef.current.pausedOffset = drops.a && drops.b ? rawProgress() : getCurrentOffset();
     stopSources();
     setIsPlaying(false);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  }, [getCurrentOffset, stopSources]);
+  }, [rawProgress, getCurrentOffset, stopSources]);
 
   const togglePlay = useCallback(() => {
-    if (isPlaying) pause();
-    else play(playStateRef.current.pausedOffset >= duration ? 0 : playStateRef.current.pausedOffset);
+    if (isPlaying) { pause(); return; }
+    const dropMode = dropRef.current.a && dropRef.current.b;
+    const po = playStateRef.current.pausedOffset;
+    play(!dropMode && po >= duration ? 0 : po);
   }, [isPlaying, pause, play, duration]);
 
   const seek = useCallback((offset) => {
+    const drops = dropRef.current;
+    if (drops.a && drops.b) {
+      // Klick in eine der Drop-Regionen setzt die gemeinsame Phase;
+      // außerhalb starten beide Drops von vorn.
+      const inA = offset >= drops.a.start && offset < drops.a.end;
+      const inB = offset >= drops.b.start && offset < drops.b.end;
+      const phase = inA ? offset - drops.a.start : inB ? offset - drops.b.start : 0;
+      if (isPlaying) play(phase);
+      else {
+        playStateRef.current.pausedOffset = phase;
+        const r = active === "A" ? drops.a : drops.b;
+        notifyFrame(r.start + (phase % (r.end - r.start)));
+      }
+      return;
+    }
     // Bei aktivem Loop bleibt der Playhead innerhalb der Region
     const loop = loopRef.current;
     if (loop) offset = Math.min(Math.max(offset, loop.start), Math.max(loop.start, loop.end - 0.01));
@@ -287,11 +339,41 @@ export function useABCompare() {
       playStateRef.current.pausedOffset = offset;
       notifyFrame(offset);
     }
-  }, [isPlaying, play, notifyFrame]);
+  }, [isPlaying, play, notifyFrame, active]);
+
+  const setDropRegion = useCallback((which, region) => {
+    const wasDropMode = dropRef.current.a && dropRef.current.b;
+    // Position VOR dem Umschalten sichern — die Abbildung hängt vom alten Modus ab
+    const currentPos = getCurrentOffset();
+    dropRef.current = { ...dropRef.current, [which]: region };
+    setDropRegionsState({ ...dropRef.current });
+    // Drops und gemeinsamer Loop schließen sich gegenseitig aus
+    if (region && loopRef.current) {
+      loopRef.current = null;
+      setLoopRegionState(null);
+    }
+    const isDropMode = dropRef.current.a && dropRef.current.b;
+    if (isPlaying) {
+      // Beim Eintritt in den Drop-Modus beide Drops von vorn starten
+      if (isDropMode || wasDropMode) play(isDropMode ? 0 : currentPos);
+    } else if (isDropMode) {
+      playStateRef.current.pausedOffset = 0;
+      const r = active === "A" ? dropRef.current.a : dropRef.current.b;
+      notifyFrame(r.start);
+    } else if (wasDropMode) {
+      playStateRef.current.pausedOffset = currentPos;
+      notifyFrame(currentPos);
+    }
+  }, [isPlaying, play, getCurrentOffset, notifyFrame, active]);
 
   const setLoopRegion = useCallback((region) => {
     // Offset VOR dem Umschalten berechnen — die Formel hängt von der alten Loop ab
     const current = getCurrentOffset();
+    // Ein gemeinsamer Loop ersetzt gesetzte Drop-Regionen
+    if (region && (dropRef.current.a || dropRef.current.b)) {
+      dropRef.current = { a: null, b: null };
+      setDropRegionsState({ a: null, b: null });
+    }
     loopRef.current = region;
     setLoopRegionState(region);
     if (isPlaying) {
@@ -346,7 +428,14 @@ export function useABCompare() {
     gainBRef.current.gain.linearRampToValueAtTime(targetB, now + 0.008);
 
     setActiveState(track);
-  }, [active, ensureGainNodes, getCtx]);
+    // Im Drop-Modus zeigt der Playhead sofort die Region des neuen Tracks
+    const drops = dropRef.current;
+    if (drops.a && drops.b && !isPlaying) {
+      const r = track === "A" ? drops.a : drops.b;
+      const raw = playStateRef.current.pausedOffset;
+      notifyFrame(r.start + (raw % (r.end - r.start)));
+    }
+  }, [active, ensureGainNodes, getCtx, isPlaying, notifyFrame]);
 
   // Aufräumen, wenn die Komponente verschwindet
   useEffect(() => {
@@ -359,8 +448,8 @@ export function useABCompare() {
 
   return {
     bufferA, bufferB, lufsA, lufsB, peaksA, peaksB, metaA, metaB, loudA, loudB,
-    active, isPlaying, duration, status, loopRegion, filterBand,
-    loadFile, togglePlay, seek, setActive, setLoopRegion, setFilterBand,
+    active, isPlaying, duration, status, loopRegion, filterBand, dropRegions,
+    loadFile, togglePlay, seek, setActive, setLoopRegion, setFilterBand, setDropRegion,
     getCurrentOffset, subscribeFrame, getAnalysers, getStereoTaps,
   };
 }

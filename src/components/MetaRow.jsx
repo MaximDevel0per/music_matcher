@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 
 function fmtKey(key) {
   if (!key) return "—";
@@ -43,6 +43,7 @@ function fmtWidth(stereo) {
 }
 
 export default function MetaRow({ metaA, metaB, lufsA, lufsB }) {
+  const [open, setOpen] = useState(true);
   if (!metaA || !metaB) return null;
 
   const rows = [
@@ -61,12 +62,22 @@ export default function MetaRow({ metaA, metaB, lufsA, lufsB }) {
   ];
 
   return (
-    <div className="abc-meta-box">
-      <div className="abc-meta-head">
-        <div className="abc-spectrum-title">Track Details</div>
-        <div className="abc-meta-hint">Key & BPM detected automatically (estimate)</div>
-      </div>
-      {rows.map((row) => (
+    <div className={`abc-meta-box ${open ? "" : "collapsed"}`}>
+      <button
+        type="button"
+        className="abc-meta-head abc-meta-toggle"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        <div className="abc-spectrum-title">
+          <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
+          Track Details
+        </div>
+        <div className="abc-meta-hint">
+          {open ? "Key & BPM detected automatically (estimate)" : "Click to expand"}
+        </div>
+      </button>
+      {open && rows.map((row) => (
         <div className="abc-meta-line" key={row.label}>
           <div className="val a">{row.a}</div>
           <div className="label">{row.label}</div>

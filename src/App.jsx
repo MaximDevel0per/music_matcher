@@ -81,8 +81,8 @@ export default function App() {
               subscribeFrame={engine.subscribeFrame}
               getCurrentOffset={engine.getCurrentOffset}
               onSeek={engine.seek}
-              loopRegion={engine.loopRegion}
-              onLoopChange={engine.setLoopRegion}
+              dropRegions={engine.dropRegions}
+              onDropChange={engine.setDropRegion}
             />
           </>
         )}
