@@ -11,20 +11,20 @@ const LANES = {
 };
 
 /**
- * Beide Tracks als eigene Spuren untereinander. Ziehen in einer Spur
- * markiert die Drop-Region DIESES Tracks; sind beide markiert, loopt
- * jeder Track seine eigene Region (Drop-Vergleichsmodus der Engine).
+ * Beide Tracks als eigene Spuren untereinander, jede mit eigenem Playhead —
+ * beide Tracks laufen ja immer gleichzeitig. Ziehen in einer Spur loopt
+ * diesen Track auf die Auswahl (typisch: die beste Stelle der Referenz),
+ * Klick in eine Spur positioniert nur diesen Track. So loopt die Referenz
+ * dauerhaft, während man im eigenen Mix frei navigiert und umschaltet.
  */
-export default function Waveform({ peaksA, peaksB, active, duration, subscribeFrame, getCurrentOffset, onSeek, dropRegions, onDropChange }) {
+export default function Waveform({ peaksA, peaksB, active, duration, subscribeFrame, getPositions, onLaneSeek, trackLoops, onLoopChange }) {
   const canvasRef = useRef(null);
   // Laufende Drag-Auswahl lebt in Refs, nicht im State — sie ändert sich
   // bei jeder Mausbewegung und soll keine Re-Renders auslösen.
   const dragRef = useRef(null);
   const dragSelRef = useRef(null);
 
-  const dropMode = dropRegions?.a && dropRegions?.b;
-
-  const draw = useCallback((offset) => {
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
@@ -36,17 +36,18 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
     ctx.clearRect(0, 0, w, TOTAL_H);
 
     const sel = dragSelRef.current;
+    const positions = getPositions();
 
     const drawLane = (lane, peaks, isActive) => {
-      const { top, rgb, label } = LANES[lane];
+      const { top, rgb, label, hex } = LANES[lane];
       const mid = top + LANE_H / 2;
 
       // Spur-Hintergrund
       ctx.fillStyle = "rgba(141,138,147,0.06)";
       ctx.fillRect(0, top, w, LANE_H);
 
-      // Drop-Region dieses Tracks (laufende Auswahl hat Vorrang)
-      const region = sel?.lane === lane ? sel : dropRegions?.[lane];
+      // Loop-Region dieses Tracks (laufende Auswahl hat Vorrang)
+      const region = sel?.lane === lane ? sel : trackLoops?.[lane];
       if (region && duration > 0) {
         const x1 = (region.start / duration) * w;
         const x2 = (region.end / duration) * w;
@@ -55,12 +56,15 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
         ctx.fillStyle = `rgba(${rgb},0.85)`;
         ctx.fillRect(x1, top, 1.5, LANE_H);
         ctx.fillRect(x2 - 1.5, top, 1.5, LANE_H);
+        ctx.font = "9px 'IBM Plex Mono', monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("LOOP", x1 + 5, top + LANE_H - 6);
       }
 
       // Peaks
       if (peaks) {
         ctx.globalAlpha = isActive ? 0.9 : 0.35;
-        ctx.fillStyle = LANES[lane].hex;
+        ctx.fillStyle = hex;
         const bw = w / peaks.length;
         for (let i = 0; i < peaks.length; i++) {
           const [min, max] = peaks[i];
@@ -76,36 +80,31 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
       ctx.textAlign = "left";
       ctx.fillStyle = isActive ? `rgba(${rgb},0.95)` : "rgba(141,138,147,0.7)";
       ctx.fillText(label, 5, top + 12);
+
+      // Eigener Playhead pro Spur — beide Tracks laufen immer parallel,
+      // der aktive (hörbare) bekommt die kräftigere Linie.
+      const pos = positions[lane];
+      if (duration > 0 && pos >= 0 && pos <= duration) {
+        const x = (pos / duration) * w;
+        ctx.fillStyle = isActive ? "#edeae3" : "rgba(237,234,227,0.4)";
+        ctx.fillRect(x - 1, top, 2, LANE_H);
+      }
     };
 
     drawLane("a", peaksA, active === "A");
     drawLane("b", peaksB, active === "B");
-
-    // Playhead: im Drop-Modus nur in der aktiven Spur (die Positionen der
-    // Tracks sind dort unabhängig), sonst über beide Spuren durchgezogen.
-    if (duration > 0 && offset >= 0) {
-      const x = (offset / duration) * w;
-      ctx.fillStyle = "#edeae3";
-      if (dropMode) {
-        const { top } = LANES[active === "A" ? "a" : "b"];
-        ctx.fillRect(x - 1, top, 2, LANE_H);
-      } else {
-        ctx.fillRect(x - 1, 0, 2, TOTAL_H);
-      }
-    }
-  }, [peaksA, peaksB, active, duration, dropRegions, dropMode]);
+  }, [peaksA, peaksB, active, duration, trackLoops, getPositions]);
 
   // Meldet sich beim Hook an, um bei jedem Wiedergabe-Frame neu zu zeichnen.
   useEffect(() => {
-    draw(getCurrentOffset());
+    draw();
     return subscribeFrame(draw);
-  }, [draw, subscribeFrame, getCurrentOffset]);
+  }, [draw, subscribeFrame]);
 
   useEffect(() => {
-    const handleResize = () => draw(getCurrentOffset());
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [draw, getCurrentOffset]);
+    window.addEventListener("resize", draw);
+    return () => window.removeEventListener("resize", draw);
+  }, [draw]);
 
   const pctFromEvent = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -132,7 +131,7 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
     const t1 = drag.startPct * duration;
     const t2 = pct * duration;
     dragSelRef.current = { start: Math.min(t1, t2), end: Math.max(t1, t2), lane: drag.lane };
-    draw(getCurrentOffset());
+    draw();
   };
 
   const handlePointerUp = (e) => {
@@ -142,16 +141,16 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
     const sel = dragSelRef.current;
     dragSelRef.current = null;
     if (drag.moved && sel && sel.end - sel.start >= MIN_REGION_SEC) {
-      onDropChange(sel.lane, { start: sel.start, end: sel.end });
+      onLoopChange(sel.lane, { start: sel.start, end: sel.end });
     } else {
-      onSeek(pctFromEvent(e) * duration);
-      draw(getCurrentOffset());
+      onLaneSeek(drag.lane, pctFromEvent(e) * duration);
+      draw();
     }
   };
 
-  const clearDrops = () => {
-    onDropChange("a", null);
-    onDropChange("b", null);
+  const clearLoops = () => {
+    if (trackLoops?.a) onLoopChange("a", null);
+    if (trackLoops?.b) onLoopChange("b", null);
   };
 
   return (
@@ -162,24 +161,23 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onDoubleClick={clearDrops}
+        onDoubleClick={clearLoops}
       />
       <div className="abc-wave-hint">
         <span>
-          Click: seek · Drag on a track: mark its section · Double-click: clear
+          Drag on the reference: loop that section · Click a track: jump there · Double-click: clear loops
         </span>
         <span style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {dropRegions?.a && (
+          {trackLoops?.a && (
             <span className="abc-loop-badge" style={{ color: LANES.a.hex }}>
-              A {formatTime(dropRegions.a.start)}–{formatTime(dropRegions.a.end)}
+              Mix loop {formatTime(trackLoops.a.start)}–{formatTime(trackLoops.a.end)}
             </span>
           )}
-          {dropRegions?.b && (
+          {trackLoops?.b && (
             <span className="abc-loop-badge" style={{ color: LANES.b.hex }}>
-              B {formatTime(dropRegions.b.start)}–{formatTime(dropRegions.b.end)}
+              Ref loop {formatTime(trackLoops.b.start)}–{formatTime(trackLoops.b.end)}
             </span>
           )}
-          {dropMode && <span className="abc-loop-badge">Comparing sections</span>}
         </span>
       </div>
     </div>

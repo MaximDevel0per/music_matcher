@@ -6,6 +6,13 @@ import { analyzeTrack } from "../lib/analysis.js";
  * Kapselt den kompletten Audio-Zustand (AudioContext, Buffer, GainNodes,
  * Wiedergabe) hinter einer sauberen API. Die UI-Komponenten müssen nichts
  * über Web Audio wissen — sie rufen nur z.B. togglePlay() oder seek() auf.
+ *
+ * Wiedergabemodell: Beide Tracks laufen immer gleichzeitig (der inaktive ist
+ * stummgeschaltet). Jeder Track kann unabhängig einen Loop haben — typisch:
+ * die Referenz loopt ihre beste Stelle, der eigene Mix läuft frei und wird
+ * per Klick beliebig positioniert. Positionen ergeben sich aus einer
+ * gemeinsamen Clock plus einer Basis pro Track (Phase bei Loop, sonst
+ * absolute Position).
  */
 export function useABCompare() {
   const [bufferA, setBufferA] = useState(null);
@@ -22,13 +29,11 @@ export function useABCompare() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [status, setStatus] = useState("");
-  const [loopRegion, setLoopRegionState] = useState(null);
   // Frequenz-Fokus: null = volles Spektrum, sonst { low, high } in Hz
   const [filterBand, setFilterBandState] = useState(null);
-  // Drop-Regionen pro Track. Sind BEIDE gesetzt, loopt jeder Track seine
-  // eigene Region ("Drop-Modus") — so vergleicht man Drop gegen Drop,
-  // auch wenn sie an unterschiedlichen Song-Positionen liegen.
-  const [dropRegions, setDropRegionsState] = useState({ a: null, b: null });
+  // Loop pro Track (null = läuft frei). Typischer Einsatz: Referenz (b)
+  // loopt eine markierte Stelle, der Mix (a) bleibt frei navigierbar.
+  const [trackLoops, setTrackLoopsState] = useState({ a: null, b: null });
 
   // Alles, was sich pro Audio-Frame ändern würde (Playhead-Position),
   // geht NICHT durch React State — das wären 60 Re-Renders/Sekunde.
@@ -44,13 +49,10 @@ export function useABCompare() {
   const srcARef = useRef(null);
   const srcBRef = useRef(null);
   const matchGainRef = useRef({ a: 1, b: 1 });
-  // Loop-Region auch als Ref, damit rAF-Loop und Offset-Berechnung
-  // ohne Re-Render darauf zugreifen können.
-  const loopRef = useRef(null);
-  const dropRef = useRef({ a: null, b: null });
-  // Im Drop-Modus sind startOffset/pausedOffset eine PHASE (Sekunden seit
-  // Regionsstart), sonst eine absolute Song-Position.
-  const playStateRef = useRef({ startCtxTime: 0, startOffset: 0, pausedOffset: 0 });
+  const loopsRef = useRef({ a: null, b: null });
+  // base = Basis pro Track: Phase (Sekunden seit Regionsstart) bei Loop,
+  // sonst absolute Song-Position. Position = Basis + verstrichene Zeit.
+  const playStateRef = useRef({ startCtxTime: 0, base: { a: 0, b: 0 } });
   const rafRef = useRef(null);
 
   // Mehrere UI-Teile (Waveform, Transport) wollen bei jedem Frame
@@ -214,180 +216,154 @@ export function useABCompare() {
     srcBRef.current = null;
   }, []);
 
-  // Roher Fortschritt seit Start: Phase (Drop-Modus) bzw. absolute Position
-  const rawProgress = useCallback(() => {
-    if (!isPlaying) return playStateRef.current.pausedOffset;
-    const ctx = getCtx();
-    return playStateRef.current.startOffset + (ctx.currentTime - playStateRef.current.startCtxTime);
+  const elapsed = useCallback(() => {
+    if (!isPlaying) return 0;
+    return getCtx().currentTime - playStateRef.current.startCtxTime;
   }, [isPlaying, getCtx]);
 
-  const getCurrentOffset = useCallback(() => {
-    const raw = rawProgress();
-    const drops = dropRef.current;
-    if (drops.a && drops.b) {
-      // Drop-Modus: Phase auf die Region des aktiven Tracks abbilden
-      const r = active === "A" ? drops.a : drops.b;
-      return r.start + (raw % (r.end - r.start));
+  // Aktuelle Song-Position eines Tracks: geloopte Tracks kreisen in ihrer
+  // Region, freie laufen linear.
+  const positionOf = useCallback((which) => {
+    const e = elapsed();
+    const base = playStateRef.current.base[which];
+    const r = loopsRef.current[which];
+    if (r) return r.start + ((base + e) % (r.end - r.start));
+    return base + e;
+  }, [elapsed]);
+
+  const getPositions = useCallback(() => ({
+    a: positionOf("a"),
+    b: positionOf("b"),
+  }), [positionOf]);
+
+  // Transport und Loudness-Graph folgen der Mix-Timeline (Track A)
+  const getCurrentOffset = useCallback(() => positionOf("a"), [positionOf]);
+
+  // Friert die aktuellen Positionen als neue Basen ein und setzt die Clock
+  // zurück — nötig vor jedem Eingriff, der Basen ändert oder Quellen neu startet.
+  const freezeBases = useCallback(() => {
+    const next = {};
+    for (const which of ["a", "b"]) {
+      const r = loopsRef.current[which];
+      const pos = positionOf(which);
+      next[which] = r ? pos - r.start : pos;
     }
-    // Bei aktivem Loop springt die BufferSource nativ von loopEnd auf
-    // loopStart zurück — die lineare Zeitrechnung muss das nachvollziehen.
-    const loop = loopRef.current;
-    if (loop && raw > loop.end) {
-      return loop.start + ((raw - loop.end) % (loop.end - loop.start));
-    }
-    return raw;
-  }, [rawProgress, active]);
+    playStateRef.current.base = next;
+    playStateRef.current.startCtxTime = getCtx().currentTime;
+  }, [positionOf, getCtx]);
 
   const loopFrame = useCallback(() => {
-    const offset = getCurrentOffset();
-    if (offset >= duration) {
+    const posA = positionOf("a");
+    // Nur ein frei laufender Mix beendet die Wiedergabe; geloopte Tracks
+    // laufen endlos weiter.
+    if (!loopsRef.current.a && posA >= duration) {
+      freezeBases();
+      playStateRef.current.base.a = 0;
       stopSources();
-      playStateRef.current.pausedOffset = 0;
       setIsPlaying(false);
       notifyFrame(0);
       return;
     }
-    notifyFrame(offset);
+    notifyFrame(posA);
     rafRef.current = requestAnimationFrame(loopFrame);
-  }, [duration, getCurrentOffset, stopSources, notifyFrame]);
+  }, [duration, positionOf, freezeBases, stopSources, notifyFrame]);
 
-  const play = useCallback((offset) => {
+  // Startet beide Quellen ab den aktuellen Basen in playStateRef.
+  const startPlayback = useCallback(() => {
     if (!bufferA || !bufferB) return;
     stopSources();
     const ctx = getCtx();
-    const srcA = ctx.createBufferSource();
-    srcA.buffer = bufferA;
-    srcA.connect(analyserARef.current);
-    srcA.connect(stereoARef.current.input);
-    const srcB = ctx.createBufferSource();
-    srcB.buffer = bufferB;
-    srcB.connect(analyserBRef.current);
-    srcB.connect(stereoBRef.current.input);
+    const mkSrc = (buffer, analyser, tap) => {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(analyser);
+      src.connect(tap.input);
+      return src;
+    };
+    const srcA = mkSrc(bufferA, analyserARef.current, stereoARef.current);
+    const srcB = mkSrc(bufferB, analyserBRef.current, stereoBRef.current);
 
     const when = ctx.currentTime + 0.06;
-    const drops = dropRef.current;
-    if (drops.a && drops.b) {
-      // Drop-Modus: jeder Track loopt nativ seine eigene Region;
-      // `offset` ist hier eine gemeinsame Phase ab Regionsstart.
-      const phase = Math.max(0, offset);
-      [[srcA, drops.a], [srcB, drops.b]].forEach(([s, r]) => {
-        s.loop = true;
-        s.loopStart = r.start;
-        s.loopEnd = r.end;
-        s.start(when, r.start + (phase % (r.end - r.start)));
-      });
-      offset = phase;
-    } else {
-      // Natives Looping der BufferSources: sample-genau und ohne Lücke.
-      const loop = loopRef.current;
-      if (loop) {
-        if (offset < loop.start || offset >= loop.end) offset = loop.start;
-        [srcA, srcB].forEach((s) => {
-          s.loop = true;
-          s.loopStart = loop.start;
-          s.loopEnd = loop.end;
-        });
+    const base = playStateRef.current.base;
+    [["a", srcA], ["b", srcB]].forEach(([which, src]) => {
+      const r = loopsRef.current[which];
+      if (r) {
+        // Natives Looping der BufferSource: sample-genau und ohne Lücke
+        const len = r.end - r.start;
+        src.loop = true;
+        src.loopStart = r.start;
+        src.loopEnd = r.end;
+        base[which] = ((base[which] % len) + len) % len;
+        src.start(when, r.start + base[which]);
+      } else {
+        base[which] = Math.max(0, base[which]);
+        src.start(when, base[which]);
       }
-      srcA.start(when, offset);
-      srcB.start(when, offset);
-    }
+    });
+    playStateRef.current.startCtxTime = when;
     srcARef.current = srcA;
     srcBRef.current = srcB;
-    playStateRef.current.startCtxTime = when;
-    playStateRef.current.startOffset = offset;
     setIsPlaying(true);
     rafRef.current = requestAnimationFrame(loopFrame);
   }, [bufferA, bufferB, getCtx, stopSources, loopFrame]);
 
   const pause = useCallback(() => {
-    const drops = dropRef.current;
-    // Im Drop-Modus die Phase sichern, sonst die absolute Position
-    playStateRef.current.pausedOffset = drops.a && drops.b ? rawProgress() : getCurrentOffset();
+    freezeBases();
     stopSources();
     setIsPlaying(false);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  }, [rawProgress, getCurrentOffset, stopSources]);
+  }, [freezeBases, stopSources]);
 
   const togglePlay = useCallback(() => {
     if (isPlaying) { pause(); return; }
-    const dropMode = dropRef.current.a && dropRef.current.b;
-    const po = playStateRef.current.pausedOffset;
-    play(!dropMode && po >= duration ? 0 : po);
-  }, [isPlaying, pause, play, duration]);
+    const base = playStateRef.current.base;
+    // Frei laufender Mix am Ende: von vorn (synchron, wenn auch B frei ist)
+    if (!loopsRef.current.a && base.a >= duration) {
+      base.a = 0;
+      if (!loopsRef.current.b) base.b = 0;
+    }
+    startPlayback();
+  }, [isPlaying, pause, startPlayback, duration]);
 
-  const seek = useCallback((offset) => {
-    const drops = dropRef.current;
-    if (drops.a && drops.b) {
-      // Klick in eine der Drop-Regionen setzt die gemeinsame Phase;
-      // außerhalb starten beide Drops von vorn.
-      const inA = offset >= drops.a.start && offset < drops.a.end;
-      const inB = offset >= drops.b.start && offset < drops.b.end;
-      const phase = inA ? offset - drops.a.start : inB ? offset - drops.b.start : 0;
-      if (isPlaying) play(phase);
-      else {
-        playStateRef.current.pausedOffset = phase;
-        const r = active === "A" ? drops.a : drops.b;
-        notifyFrame(r.start + (phase % (r.end - r.start)));
-      }
-      return;
+  // Positioniert EINEN Track. Der andere behält seine Position/Phase —
+  // außer beide laufen frei, dann bleiben sie synchron (klassischer Seek).
+  const seekTrack = useCallback((which, t) => {
+    freezeBases();
+    const base = playStateRef.current.base;
+    const r = loopsRef.current[which];
+    if (r) {
+      // Klick in die Region setzt die Phase, außerhalb startet sie von vorn
+      base[which] = t >= r.start && t < r.end ? t - r.start : 0;
+    } else {
+      base[which] = Math.min(Math.max(0, t), duration);
+      const other = which === "a" ? "b" : "a";
+      if (!loopsRef.current[other]) base[other] = base[which];
     }
-    // Bei aktivem Loop bleibt der Playhead innerhalb der Region
-    const loop = loopRef.current;
-    if (loop) offset = Math.min(Math.max(offset, loop.start), Math.max(loop.start, loop.end - 0.01));
-    if (isPlaying) play(offset);
-    else {
-      playStateRef.current.pausedOffset = offset;
-      notifyFrame(offset);
-    }
-  }, [isPlaying, play, notifyFrame, active]);
+    if (isPlaying) startPlayback();
+    else notifyFrame(positionOf("a"));
+  }, [freezeBases, duration, isPlaying, startPlayback, notifyFrame, positionOf]);
 
-  const setDropRegion = useCallback((which, region) => {
-    const wasDropMode = dropRef.current.a && dropRef.current.b;
-    // Position VOR dem Umschalten sichern — die Abbildung hängt vom alten Modus ab
-    const currentPos = getCurrentOffset();
-    dropRef.current = { ...dropRef.current, [which]: region };
-    setDropRegionsState({ ...dropRef.current });
-    // Drops und gemeinsamer Loop schließen sich gegenseitig aus
-    if (region && loopRef.current) {
-      loopRef.current = null;
-      setLoopRegionState(null);
-    }
-    const isDropMode = dropRef.current.a && dropRef.current.b;
-    if (isPlaying) {
-      // Beim Eintritt in den Drop-Modus beide Drops von vorn starten
-      if (isDropMode || wasDropMode) play(isDropMode ? 0 : currentPos);
-    } else if (isDropMode) {
-      playStateRef.current.pausedOffset = 0;
-      const r = active === "A" ? dropRef.current.a : dropRef.current.b;
-      notifyFrame(r.start);
-    } else if (wasDropMode) {
-      playStateRef.current.pausedOffset = currentPos;
-      notifyFrame(currentPos);
-    }
-  }, [isPlaying, play, getCurrentOffset, notifyFrame, active]);
+  // Transport/Loudness-Graph steuern die Mix-Timeline
+  const seek = useCallback((t) => seekTrack("a", t), [seekTrack]);
 
-  const setLoopRegion = useCallback((region) => {
-    // Offset VOR dem Umschalten berechnen — die Formel hängt von der alten Loop ab
-    const current = getCurrentOffset();
-    // Ein gemeinsamer Loop ersetzt gesetzte Drop-Regionen
-    if (region && (dropRef.current.a || dropRef.current.b)) {
-      dropRef.current = { a: null, b: null };
-      setDropRegionsState({ a: null, b: null });
+  const setTrackLoop = useCallback((which, region) => {
+    // Position VOR der Änderung sichern — die Basis-Abbildung ändert sich
+    const absPos = positionOf(which);
+    freezeBases();
+    loopsRef.current = { ...loopsRef.current, [which]: region };
+    setTrackLoopsState({ ...loopsRef.current });
+    const base = playStateRef.current.base;
+    if (region) {
+      // Liegt die aktuelle Position in der Region, dort weiterlaufen,
+      // sonst am Regionsstart beginnen
+      base[which] = absPos >= region.start && absPos < region.end ? absPos - region.start : 0;
+    } else {
+      // Loop aufgehoben: ab der aktuellen Stelle frei weiterlaufen
+      base[which] = Math.min(Math.max(0, absPos), duration);
     }
-    loopRef.current = region;
-    setLoopRegionState(region);
-    if (isPlaying) {
-      // Quellen mit neuer Loop-Konfiguration neu starten
-      if (region) {
-        play(current >= region.start && current < region.end ? current : region.start);
-      } else {
-        play(current);
-      }
-    } else if (region && (current < region.start || current >= region.end)) {
-      playStateRef.current.pausedOffset = region.start;
-      notifyFrame(region.start);
-    }
-  }, [isPlaying, getCurrentOffset, play, notifyFrame]);
+    if (isPlaying) startPlayback();
+    else notifyFrame(positionOf("a"));
+  }, [positionOf, freezeBases, duration, isPlaying, startPlayback, notifyFrame]);
 
   const setFilterBand = useCallback((band) => {
     ensureGainNodes();
@@ -428,14 +404,7 @@ export function useABCompare() {
     gainBRef.current.gain.linearRampToValueAtTime(targetB, now + 0.008);
 
     setActiveState(track);
-    // Im Drop-Modus zeigt der Playhead sofort die Region des neuen Tracks
-    const drops = dropRef.current;
-    if (drops.a && drops.b && !isPlaying) {
-      const r = track === "A" ? drops.a : drops.b;
-      const raw = playStateRef.current.pausedOffset;
-      notifyFrame(r.start + (raw % (r.end - r.start)));
-    }
-  }, [active, ensureGainNodes, getCtx, isPlaying, notifyFrame]);
+  }, [active, ensureGainNodes, getCtx]);
 
   // Aufräumen, wenn die Komponente verschwindet
   useEffect(() => {
@@ -448,8 +417,8 @@ export function useABCompare() {
 
   return {
     bufferA, bufferB, lufsA, lufsB, peaksA, peaksB, metaA, metaB, loudA, loudB,
-    active, isPlaying, duration, status, loopRegion, filterBand, dropRegions,
-    loadFile, togglePlay, seek, setActive, setLoopRegion, setFilterBand, setDropRegion,
-    getCurrentOffset, subscribeFrame, getAnalysers, getStereoTaps,
+    active, isPlaying, duration, status, filterBand, trackLoops,
+    loadFile, togglePlay, seek, seekTrack, setActive, setTrackLoop, setFilterBand,
+    getCurrentOffset, getPositions, subscribeFrame, getAnalysers, getStereoTaps,
   };
 }

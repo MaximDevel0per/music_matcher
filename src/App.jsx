@@ -79,10 +79,10 @@ export default function App() {
               active={engine.active}
               duration={engine.duration}
               subscribeFrame={engine.subscribeFrame}
-              getCurrentOffset={engine.getCurrentOffset}
-              onSeek={engine.seek}
-              dropRegions={engine.dropRegions}
-              onDropChange={engine.setDropRegion}
+              getPositions={engine.getPositions}
+              onLaneSeek={engine.seekTrack}
+              trackLoops={engine.trackLoops}
+              onLoopChange={engine.setTrackLoop}
             />
           </>
         )}
