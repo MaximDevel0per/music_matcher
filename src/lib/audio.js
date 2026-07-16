@@ -149,7 +149,43 @@ export function sniffFormatInfo(arrayBuffer) {
       }
       return none;
     }
-    // MP3: optionalen ID3v2-Tag überspringen, ersten Frame-Sync suchen
+    // MP4/M4A: Box-Struktur bis zum mdhd der (Audio-)Spur durchlaufen —
+    // dessen timescale ist die Sample-Rate
+    if (tag(4, "ftyp")) {
+      const boxType = (off) => String.fromCharCode(
+        dv.getUint8(off + 4), dv.getUint8(off + 5), dv.getUint8(off + 6), dv.getUint8(off + 7)
+      );
+      const CONTAINERS = new Set(["moov", "trak", "mdia"]);
+      const walk = (start, end) => {
+        let off = start;
+        while (off + 8 <= end) {
+          let size = dv.getUint32(off);
+          let hdr = 8;
+          if (size === 1) { // 64-bit-Größe; high-Word ignoriert (Dateien < 4 GB)
+            size = dv.getUint32(off + 12);
+            hdr = 16;
+          }
+          if (size === 0) size = end - off;
+          if (size < hdr || off + size > end) return null;
+          const type = boxType(off);
+          if (type === "mdhd") {
+            const version = dv.getUint8(off + hdr);
+            return dv.getUint32(off + hdr + (version === 1 ? 20 : 12));
+          }
+          if (CONTAINERS.has(type)) {
+            const found = walk(off + hdr, off + size);
+            if (found) return found;
+          }
+          off += size;
+        }
+        return null;
+      };
+      return { sampleRate: walk(0, dv.byteLength), bitDepth: null };
+    }
+    // MP3: optionalen ID3v2-Tag überspringen, dann ersten VALIDEN Frame
+    // suchen. Ein Sync-Treffer zählt nur, wenn am berechneten Frame-Ende
+    // direkt der nächste Frame mit gleicher Rate beginnt — sonst liefern
+    // zufällige 0xFF-Bytes (Cover-Art, Fremdformate) falsche Raten.
     let off = 0;
     if (tag(0, "ID3")) {
       const size = (dv.getUint8(6) << 21) | (dv.getUint8(7) << 14) | (dv.getUint8(8) << 7) | dv.getUint8(9);
@@ -157,13 +193,45 @@ export function sniffFormatInfo(arrayBuffer) {
     }
     // Sample-Raten je MPEG-Version (Index = Bits 3-2 in Byte 2 des Headers)
     const RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+    // Bitraten-Tabellen in kbps: [Layer][Index]; MPEG1 und MPEG2/2.5 getrennt
+    const KBPS = {
+      mpeg1: {
+        1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+        2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+        3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+      },
+      mpeg2: {
+        1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+        2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+        3: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+      },
+    };
+    const parseFrame = (pos) => {
+      if (pos + 4 > dv.byteLength) return null;
+      if (dv.getUint8(pos) !== 0xff || (dv.getUint8(pos + 1) & 0xe0) !== 0xe0) return null;
+      const b1 = dv.getUint8(pos + 1), b2 = dv.getUint8(pos + 2);
+      const version = (b1 >> 3) & 3; // 0=MPEG2.5, 2=MPEG2, 3=MPEG1
+      const layerBits = (b1 >> 1) & 3; // 3=I, 2=II, 1=III
+      const bitrateIdx = b2 >> 4;
+      const rateBits = (b2 >> 2) & 3;
+      if (version === 1 || layerBits === 0 || bitrateIdx === 0 || bitrateIdx === 15 || rateBits === 3) return null;
+      const sampleRate = RATES[version][rateBits];
+      const layer = 4 - layerBits;
+      const bitrate = (version === 3 ? KBPS.mpeg1 : KBPS.mpeg2)[layer][bitrateIdx] * 1000;
+      const padding = (b2 >> 1) & 1;
+      let frameLen;
+      if (layer === 1) frameLen = (Math.floor((12 * bitrate) / sampleRate) + padding) * 4;
+      else if (layer === 2 || version === 3) frameLen = Math.floor((144 * bitrate) / sampleRate) + padding;
+      else frameLen = Math.floor((72 * bitrate) / sampleRate) + padding; // MPEG2/2.5 Layer III
+      return { sampleRate, frameLen };
+    };
     const lim = Math.min(dv.byteLength - 4, off + 65536);
     for (; off < lim; off++) {
-      if (dv.getUint8(off) === 0xff && (dv.getUint8(off + 1) & 0xe0) === 0xe0) {
-        const version = (dv.getUint8(off + 1) >> 3) & 3;
-        const rateBits = (dv.getUint8(off + 2) >> 2) & 3;
-        if (rateBits === 3 || !RATES[version]) continue;
-        return { sampleRate: RATES[version][rateBits], bitDepth: null };
+      const f = parseFrame(off);
+      if (!f || f.frameLen < 24) continue;
+      const next = parseFrame(off + f.frameLen);
+      if (next && next.sampleRate === f.sampleRate) {
+        return { sampleRate: f.sampleRate, bitDepth: null };
       }
     }
   } catch {
