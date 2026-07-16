@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { formatTime } from "../lib/format.js";
 
-export default function Dropzone({ label, file, buffer, onFile, variant }) {
+export default function Dropzone({ label, file, buffer, sampleRate, onFile, variant }) {
   const inputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -37,7 +37,8 @@ export default function Dropzone({ label, file, buffer, onFile, variant }) {
         <>
           <div className="abc-track-name">{file.name}</div>
           <div className="abc-track-meta">
-            {formatTime(buffer.duration)} · {buffer.sampleRate} Hz · {buffer.numberOfChannels === 2 ? "Stereo" : "Mono"}
+            {/* sampleRate aus dem Datei-Header — buffer.sampleRate ist auf die Geräte-Rate resampelt */}
+            {formatTime(buffer.duration)} · {sampleRate || buffer.sampleRate} Hz · {buffer.numberOfChannels === 2 ? "Stereo" : "Mono"}
           </div>
         </>
       )}

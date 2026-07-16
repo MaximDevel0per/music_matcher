@@ -27,8 +27,10 @@ function fmtChannels(n) {
 }
 
 function fmtFormat(meta) {
+  // Bit-Tiefe nur bei PCM-Formaten (WAV/FLAC) bekannt
+  const bits = meta.bitDepth ? ` · ${meta.bitDepth}-bit` : "";
   const rate = meta.bitrateKbps ? ` · ${Math.round(meta.bitrateKbps)} kbps` : "";
-  return `${meta.format}${rate}`;
+  return `${meta.format}${bits}${rate}`;
 }
 
 function fmtCorrelation(stereo) {
