@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- App-Icon: zwei verschränkte Wellen — Mix (Amber) und Referenz (Teal) -->
+  <rect width="64" height="64" rx="14" fill="#17171b"/>
+  <path d="M10 32 Q21 10 32 32 T54 32" fill="none" stroke="#f2a93b" stroke-width="6" stroke-linecap="round"/>
+  <path d="M10 32 Q21 54 32 32 T54 32" fill="none" stroke="#5fbfb3" stroke-width="6" stroke-linecap="round" opacity="0.9"/>
+</svg>

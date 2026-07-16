@@ -127,7 +127,10 @@ export default function App() {
         {/* 1. Kopf & Einleitung */}
         <div className="abc-header">
           <div className="abc-eyebrow">Mix ⇄ Reference</div>
-          <h1>A/B Comparison</h1>
+          <h1>
+            <img src="/favicon.svg" alt="" className="abc-logo" />
+            A/B Comparison
+          </h1>
           <p>Load your mix and a reference track. Loudness is matched automatically so you can compare fairly.</p>
         </div>
 
