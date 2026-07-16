@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(npm run build)"
+      "PowerShell(npm run build)",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(chromium-cli --session abcompare)",
+      "Bash(\"/c/Program Files/Google/Chrome/Application/chrome.exe\" --headless=new --disable-gpu --virtual-time-budget=8000 --dump-dom http://localhost:5173)",
+      "Read(//tmp/**)"
     ]
   }
 }

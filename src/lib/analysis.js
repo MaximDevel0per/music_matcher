@@ -159,41 +159,6 @@ export function detectKey(mono, sampleRate) {
   };
 }
 
-/**
- * Über die Tracklänge gemitteltes Leistungsspektrum in dB.
- * Absolute Skalierung ist beliebig — für die Differenzansicht zählt nur
- * der Vergleich zweier Spektren, konstante Offsets kürzen sich heraus.
- */
-export function computeAverageSpectrum(mono, sampleRate) {
-  const N = 16384;
-  if (mono.length < N) return null;
-  const hann = new Float32Array(N);
-  for (let i = 0; i < N; i++) hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
-
-  const maxFrames = 200;
-  const step = Math.max(N, Math.floor((mono.length - N) / maxFrames));
-  const re = new Float32Array(N);
-  const im = new Float32Array(N);
-  const acc = new Float64Array(N / 2);
-  let frames = 0;
-
-  for (let pos = 0; pos + N <= mono.length; pos += step) {
-    for (let i = 0; i < N; i++) {
-      re[i] = mono[pos + i] * hann[i];
-      im[i] = 0;
-    }
-    fft(re, im);
-    for (let k = 0; k < N / 2; k++) acc[k] += re[k] * re[k] + im[k] * im[k];
-    frames++;
-  }
-
-  const db = new Float32Array(N / 2);
-  for (let k = 0; k < N / 2; k++) {
-    db[k] = 10 * Math.log10(acc[k] / frames + 1e-12);
-  }
-  return { db, binHz: sampleRate / N };
-}
-
 /** Korrelation (+1 mono … −1 gegenphasig) und Breite (Seiten-/Mitten-RMS) */
 export function analyzeStereo(buffer) {
   if (buffer.numberOfChannels < 2) return null;
@@ -232,7 +197,6 @@ export function analyzeTrack(buffer, file) {
   return {
     bpm: detectBPM(mono, buffer.sampleRate),
     key: detectKey(mono, buffer.sampleRate),
-    avgSpectrum: computeAverageSpectrum(mono, buffer.sampleRate),
     stereo: analyzeStereo(buffer),
     peakDb: peak > 0 ? 20 * Math.log10(peak) : -Infinity,
     sampleRate: buffer.sampleRate,

@@ -11,7 +11,7 @@ const COLORS = { a: "#f2a93b", b: "#5fbfb3" };
  *  - "ms":       Mitte/Seite-Pegelbalken mit Stereobreite in Prozent
  * Rechts daneben in allen Modi das Live-Korrelationsmeter für beide Tracks.
  */
-export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filterBand }) {
+export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filterBands }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const [mode, setMode] = useState("gonio");
@@ -285,7 +285,7 @@ export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filte
       <div className="abc-spectrum-head">
         <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open} title="Drag to reorder">
           <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
-          Stereo Image{filterBand ? ` · ${formatHz(filterBand.low)} – ${formatHz(filterBand.high)}` : ""}
+          Stereo Image{filterBands?.length ? ` · ${filterBands.map((b) => `${formatHz(b.low)}–${formatHz(b.high)}`).join(" + ")}` : ""}
         </button>
         {open ? (
           <div className="abc-spectrum-tools">

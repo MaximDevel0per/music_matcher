@@ -14,6 +14,14 @@ import { analyzeTrack } from "../lib/analysis.js";
  * gemeinsamen Clock plus einer Basis pro Track (Phase bei Loop, sonst
  * absolute Position).
  */
+// Drei frei definierbare Frequenzbänder; hörbar ist die Summe der aktiven.
+// Sind alle inaktiv, läuft das volle Spektrum.
+const DEFAULT_BANDS = [
+  { low: 20, high: 250, active: false },
+  { low: 250, high: 4000, active: false },
+  { low: 4000, high: 20000, active: false },
+];
+
 export function useABCompare() {
   const [bufferA, setBufferA] = useState(null);
   const [bufferB, setBufferB] = useState(null);
@@ -29,8 +37,8 @@ export function useABCompare() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [status, setStatus] = useState("");
-  // Frequenz-Fokus: null = volles Spektrum, sonst { low, high } in Hz
-  const [filterBand, setFilterBandState] = useState(null);
+  const [bands, setBandsState] = useState(DEFAULT_BANDS);
+  const bandsRef = useRef(DEFAULT_BANDS);
   // Loop pro Track (null = läuft frei). Typischer Einsatz: Referenz (b)
   // loopt eine markierte Stelle, der Mix (a) bleibt frei navigierbar.
   const [trackLoops, setTrackLoopsState] = useState({ a: null, b: null });
@@ -76,10 +84,11 @@ export function useABCompare() {
 
   const ensureGainNodes = useCallback(() => {
     const ctx = getCtx();
-    // Bandpass-Kette: Hoch- + Tiefpass, jeweils zweifach kaskadiert
-    // (24 dB/Okt), in Bypass-Stellung (Grenzfrequenzen an den Rändern
-    // des Hörbereichs). setFilterBand fährt alle Ketten synchron nach.
-    const mkBandChain = (out) => {
+    // Drei parallele Bandpass-Ketten (Hoch- + Tiefpass, jeweils zweifach
+    // kaskadiert = 24 dB/Okt), jede mit eigenem Gate-Gain dahinter.
+    // Aktive Bänder werden auf die Ketten verteilt und summiert; ohne
+    // aktives Band steht Kette 0 in Bypass-Stellung (volles Spektrum).
+    const mkMultiBand = (out) => {
       const mk = (type, freq) => {
         const f = ctx.createBiquadFilter();
         f.type = type;
@@ -87,17 +96,25 @@ export function useABCompare() {
         f.Q.value = Math.SQRT1_2;
         return f;
       };
-      const hp1 = mk("highpass", 10), hp2 = mk("highpass", 10);
-      const lp1 = mk("lowpass", 20000), lp2 = mk("lowpass", 20000);
-      hp1.connect(hp2); hp2.connect(lp1); lp1.connect(lp2);
-      lp2.connect(out);
-      return { input: hp1, hp: [hp1, hp2], lp: [lp1, lp2] };
+      const input = ctx.createGain();
+      const chains = [];
+      for (let i = 0; i < 3; i++) {
+        const hp1 = mk("highpass", 10), hp2 = mk("highpass", 10);
+        const lp1 = mk("lowpass", 20000), lp2 = mk("lowpass", 20000);
+        const gate = ctx.createGain();
+        gate.gain.value = i === 0 ? 1 : 0;
+        input.connect(hp1);
+        hp1.connect(hp2); hp2.connect(lp1); lp1.connect(lp2);
+        lp2.connect(gate); gate.connect(out);
+        chains.push({ hp: [hp1, hp2], lp: [lp1, lp2], gate });
+      }
+      return { input, chains };
     };
     // Gemeinsame Kette hinter beiden Gains: filtert nur die Wiedergabe.
     // Sitzt NACH dem Haupt-Analyser, damit das Frequenzspektrum weiterhin
     // das volle Signal zeigt (der Fokus wird dort nur optisch maskiert).
     if (!filterChainRef.current) {
-      filterChainRef.current = mkBandChain(ctx.destination);
+      filterChainRef.current = mkMultiBand(ctx.destination);
     }
     if (!gainARef.current) {
       gainARef.current = ctx.createGain();
@@ -141,10 +158,10 @@ export function useABCompare() {
       const l = mk(), r = mk();
       splitter.connect(l, 0);
       splitter.connect(r, 1);
-      // Eigene Bandpass-Kette vor dem Splitter: das Stereobild zeigt so
-      // denselben Frequenz-Fokus, den man auch hört.
-      const band = mkBandChain(splitter);
-      return { input: band.input, hp: band.hp, lp: band.lp, splitter, l, r };
+      // Eigene Filterketten vor dem Splitter: das Stereobild zeigt so
+      // dieselben aktiven Bänder, die man auch hört.
+      const multiband = mkMultiBand(splitter);
+      return { input: multiband.input, multiband, splitter, l, r };
     };
     if (!stereoARef.current) stereoARef.current = makeStereoTap();
     if (!stereoBRef.current) stereoBRef.current = makeStereoTap();
@@ -376,27 +393,65 @@ export function useABCompare() {
     else notifyFrame(positionOf("a"));
   }, [positionOf, freezeBases, duration, isPlaying, startPlayback, notifyFrame]);
 
-  const setFilterBand = useCallback((band) => {
+  // Verteilt die aktiven Bänder auf die parallelen Filterketten aller
+  // gefilterten Pfade (Wiedergabe + beide Stereo-Abgriffe). Weich statt
+  // hart springen, das vermeidet Zipper-Geräusche und Klicks.
+  const applyBands = useCallback((nextBands) => {
     ensureGainNodes();
     const ctx = getCtx();
     const now = ctx.currentTime;
     const nyquist = ctx.sampleRate / 2;
-    const low = band ? Math.max(10, Math.min(band.low, nyquist - 100)) : 10;
-    const high = band ? Math.max(low, Math.min(band.high, 20000, nyquist - 100)) : Math.min(20000, nyquist - 100);
-    // Wiedergabe-Kette und beide Stereo-Abgriffe synchron nachfahren —
-    // weich statt hart springen, das vermeidet Zipper-Geräusche
-    [filterChainRef.current, stereoARef.current, stereoBRef.current].forEach((chain) => {
-      chain.hp.forEach((f) => {
-        f.frequency.cancelScheduledValues(now);
-        f.frequency.setTargetAtTime(low, now, 0.03);
-      });
-      chain.lp.forEach((f) => {
-        f.frequency.cancelScheduledValues(now);
-        f.frequency.setTargetAtTime(high, now, 0.03);
+    const activeBands = nextBands.filter((b) => b.active);
+    const units = [
+      filterChainRef.current,
+      stereoARef.current.multiband,
+      stereoBRef.current.multiband,
+    ];
+    units.forEach((unit) => {
+      unit.chains.forEach((chain, i) => {
+        // Ohne aktives Band: Kette 0 als Bypass, Rest stumm
+        const band = activeBands.length === 0
+          ? (i === 0 ? { low: 10, high: 20000 } : null)
+          : activeBands[i] || null;
+        const low = band ? Math.max(10, Math.min(band.low, nyquist - 100)) : 10;
+        const high = band ? Math.max(low, Math.min(band.high, 20000, nyquist - 100)) : Math.min(20000, nyquist - 100);
+        chain.hp.forEach((f) => {
+          f.frequency.cancelScheduledValues(now);
+          f.frequency.setTargetAtTime(low, now, 0.03);
+        });
+        chain.lp.forEach((f) => {
+          f.frequency.cancelScheduledValues(now);
+          f.frequency.setTargetAtTime(high, now, 0.03);
+        });
+        chain.gate.gain.cancelScheduledValues(now);
+        chain.gate.gain.setTargetAtTime(band ? 1 : 0, now, 0.03);
       });
     });
-    setFilterBandState(band);
   }, [ensureGainNodes, getCtx]);
+
+  const updateBands = useCallback((mutate) => {
+    const next = mutate(bandsRef.current);
+    bandsRef.current = next;
+    setBandsState(next);
+    applyBands(next);
+  }, [applyBands]);
+
+  // Bereich eines Bandes neu definieren — das Band wird dabei aktiviert
+  const setBand = useCallback((index, range) => {
+    updateBands((prev) =>
+      prev.map((b, i) => (i === index ? { ...b, ...range, active: true } : b))
+    );
+  }, [updateBands]);
+
+  const toggleBand = useCallback((index) => {
+    updateBands((prev) =>
+      prev.map((b, i) => (i === index ? { ...b, active: !b.active } : b))
+    );
+  }, [updateBands]);
+
+  const clearBands = useCallback(() => {
+    updateBands((prev) => prev.map((b) => ({ ...b, active: false })));
+  }, [updateBands]);
 
   const setActive = useCallback((track) => {
     if (track === active) return;
@@ -428,8 +483,9 @@ export function useABCompare() {
 
   return {
     bufferA, bufferB, lufsA, lufsB, peaksA, peaksB, metaA, metaB, loudA, loudB,
-    active, isPlaying, duration, status, filterBand, trackLoops,
-    loadFile, togglePlay, seek, seekTrack, setActive, setTrackLoop, setFilterBand,
+    active, isPlaying, duration, status, bands, trackLoops,
+    loadFile, togglePlay, seek, seekTrack, setActive, setTrackLoop,
+    setBand, toggleBand, clearBands,
     getCurrentOffset, getPositions, subscribeFrame, getAnalysers, getStereoTaps,
   };
 }

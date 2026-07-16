@@ -105,12 +105,10 @@ export default function App() {
         getAnalysers={engine.getAnalysers}
         active={engine.active}
         isPlaying={engine.isPlaying}
-        avgA={engine.metaA?.avgSpectrum}
-        avgB={engine.metaB?.avgSpectrum}
-        lufsA={engine.lufsA}
-        lufsB={engine.lufsB}
-        filterBand={engine.filterBand}
-        onFilterChange={engine.setFilterBand}
+        bands={engine.bands}
+        onBandChange={engine.setBand}
+        onBandToggle={engine.toggleBand}
+        onBandsClear={engine.clearBands}
       />
     ),
     stereo: (
@@ -118,7 +116,7 @@ export default function App() {
         getStereoTaps={engine.getStereoTaps}
         active={engine.active}
         isPlaying={engine.isPlaying}
-        filterBand={engine.filterBand}
+        filterBands={engine.bands.filter((b) => b.active)}
       />
     ),
   };
@@ -158,14 +156,7 @@ export default function App() {
             {showCompare && (
               <ABSwitch active={engine.active} onToggle={engine.setActive} />
             )}
-            <Transport
-              isPlaying={engine.isPlaying}
-              duration={engine.duration}
-              onToggle={engine.togglePlay}
-              onSeek={engine.seek}
-              getCurrentOffset={engine.getCurrentOffset}
-              subscribeFrame={engine.subscribeFrame}
-            />
+            <Transport isPlaying={engine.isPlaying} onToggle={engine.togglePlay} />
             <Waveform
               peaksA={engine.peaksA}
               peaksB={engine.peaksB}

@@ -3,6 +3,9 @@ import { formatHz } from "../lib/format.js";
 
 const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
+// Feste Farben der drei Frequenzbänder (bewusst abseits der
+// Track-Farben Amber/Teal, damit nichts verwechselt wird)
+const BAND_COLORS = ["#9b8cf0", "#e08fb4", "#7fb5e6"];
 // Feinheitsgrad: Glättung über die Frequenzachse in Oktavbruchteilen
 // (0 = ungefiltert). Standard bei RTA-Analyzern: 1/6 bzw. 1/3 Oktave.
 const SMOOTHING_LEVELS = [
@@ -33,13 +36,13 @@ const GRID_FREQS = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
 const GRID_LABELS = { 100: "100", 1000: "1k", 10000: "10k" };
 const PLOT_H = 240;
 const LABEL_H = 16;
-const DIFF_RANGE_DB = 15; // Y-Achse der Differenzansicht: ±15 dB
 
-export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA, avgB, lufsA, lufsB, filterBand, onFilterChange }) {
+export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, bands, onBandChange, onBandToggle, onBandsClear }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
-  const [mode, setMode] = useState("live");
   const [smoothing, setSmoothing] = useState(0);
+  // Zuletzt angeklicktes Band — Ziehen auf dem Spektrum definiert dessen Bereich
+  const [selectedBand, setSelectedBand] = useState(0);
   const [open, setOpen] = useState(true);
   // Letzte FFT-Daten bleiben erhalten, damit das Bild bei Pause,
   // Resize oder A/B-Umschalten nicht auf Null zurückfällt.
@@ -78,31 +81,66 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
       }
     }
 
-    if (mode === "diff") {
-      drawDiff(ctx, w, plotH, freqForX);
-    } else {
-      drawLive(ctx, w, plotH, freqForX);
-    }
+    drawLive(ctx, w, plotH, freqForX);
     drawBandMask(ctx, w, plotH);
 
-    // Aktiver Frequenz-Fokus: Bereiche außerhalb des Bandes abdunkeln,
-    // damit man nur das sieht, was auch zu hören ist.
+    // Alle drei Bänder sind immer sichtbar: farbige Fläche + Kanten,
+    // inaktiv dezent, aktiv kräftig. Außerhalb der aktiven Bänder wird
+    // zusätzlich abgedunkelt, damit man sieht, was hörbar ist.
     function drawBandMask(ctx, w, plotH) {
-      if (!filterBand) return;
-      const x0 = Math.max(0, xForFreq(filterBand.low));
-      const x1 = Math.min(w, xForFreq(filterBand.high));
-      ctx.fillStyle = "rgba(23,23,27,0.82)";
-      if (x0 > 0) ctx.fillRect(0, 0, x0, plotH);
-      if (x1 < w) ctx.fillRect(x1, 0, w - x1, plotH);
-      // Bandgrenzen mit Frequenzbeschriftung
-      ctx.fillStyle = "rgba(237,234,227,0.45)";
-      ctx.fillRect(x0, 0, 1, plotH);
-      ctx.fillRect(x1 - 1, 0, 1, plotH);
+      const activeBands = bands.filter((b) => b.active);
+      if (activeBands.length) {
+        // Überlappende/angrenzende aktive Bänder zu Segmenten zusammenfassen
+        const segs = activeBands
+          .map((b) => [Math.max(0, xForFreq(b.low)), Math.min(w, xForFreq(b.high))])
+          .sort((p, q) => p[0] - q[0]);
+        const merged = [];
+        for (const s of segs) {
+          const last = merged[merged.length - 1];
+          if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+          else merged.push([s[0], s[1]]);
+        }
+        ctx.fillStyle = "rgba(23,23,27,0.82)";
+        let cursor = 0;
+        for (const [s0, s1] of merged) {
+          if (s0 > cursor) ctx.fillRect(cursor, 0, s0 - cursor, plotH);
+          cursor = Math.max(cursor, s1);
+        }
+        if (cursor < w) ctx.fillRect(cursor, 0, w - cursor, plotH);
+      }
+      // Farbige Hinterlegung aller Bänder (über der Abdunkelung, damit
+      // auch inaktive Bänder erkennbar bleiben)
+      bands.forEach((b, i) => {
+        const x0 = Math.max(0, xForFreq(b.low));
+        const x1 = Math.min(w, xForFreq(b.high));
+        ctx.fillStyle = BAND_COLORS[i];
+        ctx.globalAlpha = b.active ? 0.15 : 0.05;
+        ctx.fillRect(x0, 0, x1 - x0, plotH);
+        ctx.globalAlpha = b.active ? 0.8 : 0.3;
+        ctx.fillRect(x0, 0, 1, plotH);
+        ctx.fillRect(x1 - 1, 0, 1, plotH);
+        // Bandnummer unten im Band
+        ctx.globalAlpha = b.active ? 0.9 : 0.45;
+        ctx.textAlign = "left";
+        ctx.fillText(String(i + 1), x0 + 5, plotH - 6);
+        ctx.globalAlpha = 1;
+      });
+      // Frequenzgrenzen der aktiven Bänder beschriften; direkt am
+      // Plotrand entfällt die Beschriftung (kollidiert mit der dB-Achse
+      // und ist dort ohnehin redundant)
       ctx.fillStyle = "rgba(237,234,227,0.7)";
-      ctx.textAlign = "left";
-      ctx.fillText(formatHz(filterBand.low), x0 + 5, 12);
-      ctx.textAlign = "right";
-      ctx.fillText(formatHz(filterBand.high), x1 - 5, 12);
+      for (const b of activeBands) {
+        const x0 = Math.max(0, xForFreq(b.low));
+        const x1 = Math.min(w, xForFreq(b.high));
+        if (x0 > 40) {
+          ctx.textAlign = "left";
+          ctx.fillText(formatHz(b.low), x0 + 5, 12);
+        }
+        if (x1 < w - 4) {
+          ctx.textAlign = "right";
+          ctx.fillText(formatHz(b.high), x1 - 5, 12);
+        }
+      }
     }
 
     function drawLive(ctx, w, plotH, freqForX) {
@@ -200,103 +238,13 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
       }
     }
 
-    function drawDiff(ctx, w, plotH, freqForX) {
-      if (!avgA || !avgB) return;
-      const midY = plotH / 2;
+  }, [getAnalysers, active, isPlaying, smoothing, bands]);
 
-      // dB-Raster um die Nulllinie
-      ctx.textAlign = "left";
-      for (const d of [-10, -5, 0, 5, 10]) {
-        const y = midY - (d / DIFF_RANGE_DB) * (midY - 4);
-        ctx.fillStyle = d === 0 ? "rgba(237,234,227,0.35)" : "rgba(141,138,147,0.14)";
-        ctx.fillRect(0, y, w, 1);
-        if (d !== 0) {
-          ctx.fillStyle = "rgba(141,138,147,0.55)";
-          ctx.fillText(`${d > 0 ? "+" : ""}${d}`, 4, y - 3);
-        }
-      }
-      ctx.fillStyle = "rgba(242,169,59,0.7)";
-      ctx.fillText("A louder", 4, 12);
-      ctx.fillStyle = "rgba(95,191,179,0.7)";
-      ctx.fillText("B louder", 4, plotH - 6);
-
-      // Mittelt die dB-Werte der Bins, die ein Pixel im Log-Maßstab abdeckt
-      const sampleAvgDb = (spec, f0, f1) => {
-        const { db, binHz } = spec;
-        const b0 = f0 / binHz;
-        const i0 = Math.max(0, Math.floor(b0));
-        const i1 = Math.min(db.length, Math.max(i0 + 1, Math.ceil(f1 / binHz)));
-        if (i1 - i0 <= 1) {
-          const i = Math.min(db.length - 2, i0);
-          const frac = Math.min(1, Math.max(0, b0 - i));
-          return db[i] * (1 - frac) + db[i + 1] * frac;
-        }
-        let s = 0;
-        for (let i = i0; i < i1; i++) s += db[i];
-        return s / (i1 - i0);
-      };
-
-      // Beide Tracks werden beim Abspielen auf gleiche LUFS gebracht —
-      // dieselbe Korrektur hier, sonst zeigt die Differenz nur den Pegelunterschied.
-      const loudnessOffset = lufsB - lufsA;
-      const raw = new Float32Array(w + 1);
-      for (let x = 0; x <= w; x++) {
-        raw[x] = sampleAvgDb(avgA, freqForX(x), freqForX(x + 1))
-               - sampleAvgDb(avgB, freqForX(x), freqForX(x + 1))
-               + loudnessOffset;
-      }
-      // Glättung über die Frequenzachse: mindestens leicht (gegen
-      // FFT-Zappeln), sonst nach gewähltem Feinheitsgrad
-      const smooth = smoothArray(raw, Math.max(2, smoothR));
-
-      const yForDiff = (d) => {
-        const c = Math.min(DIFF_RANGE_DB, Math.max(-DIFF_RANGE_DB, d));
-        return midY - (c / DIFF_RANGE_DB) * (midY - 4);
-      };
-
-      // Fläche zwischen Kurve und Nulllinie, per Clipping zweifarbig gefüllt:
-      // oberhalb amber (A lauter), unterhalb teal (B lauter)
-      const areaPath = () => {
-        ctx.beginPath();
-        ctx.moveTo(0, midY);
-        for (let x = 0; x <= w; x++) ctx.lineTo(x, yForDiff(smooth[x]));
-        ctx.lineTo(w, midY);
-        ctx.closePath();
-      };
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, w, midY);
-      ctx.clip();
-      areaPath();
-      ctx.fillStyle = "rgba(242,169,59,0.3)";
-      ctx.fill();
-      ctx.restore();
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, midY, w, plotH - midY);
-      ctx.clip();
-      areaPath();
-      ctx.fillStyle = "rgba(95,191,179,0.3)";
-      ctx.fill();
-      ctx.restore();
-
-      ctx.beginPath();
-      for (let x = 0; x <= w; x++) {
-        const y = yForDiff(smooth[x]);
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = "rgba(237,234,227,0.85)";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    }
-  }, [getAnalysers, active, isPlaying, mode, smoothing, avgA, avgB, lufsA, lufsB, filterBand]);
-
-  // Animations-Loop nur im Live-Modus während der Wiedergabe; bei Pause
-  // bleibt der letzte Frame stehen. Die Differenzansicht ist statisch.
+  // Animations-Loop nur während der Wiedergabe; bei Pause
+  // bleibt der letzte Frame stehen.
   useEffect(() => {
     draw();
-    if (!isPlaying || mode !== "live") return;
+    if (!isPlaying) return;
     const loop = () => {
       draw();
       rafRef.current = requestAnimationFrame(loop);
@@ -305,15 +253,15 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
     return () => cancelAnimationFrame(rafRef.current);
     // `open` als Dependency: nach dem Aufklappen wird der neu
     // eingehängte Canvas sofort einmal gezeichnet.
-  }, [draw, isPlaying, mode, open]);
+  }, [draw, isPlaying, open]);
 
   useEffect(() => {
     window.addEventListener("resize", draw);
     return () => window.removeEventListener("resize", draw);
   }, [draw]);
 
-  // Band-Auswahl durch Ziehen direkt auf dem Spektrum; einfacher Klick
-  // (ohne Ziehen) setzt den Frequenz-Fokus zurück.
+  // Ziehen auf dem Spektrum definiert den Bereich des ausgewählten Bandes
+  // (und aktiviert es); einfacher Klick (ohne Ziehen) schaltet alle Bänder ab.
   const freqAtEvent = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     const t = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
@@ -321,7 +269,7 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
   };
 
   const handlePointerDown = (e) => {
-    if (!onFilterChange) return;
+    if (!onBandChange) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { startX: e.clientX, startFreq: freqAtEvent(e), moved: false };
   };
@@ -336,13 +284,27 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
     let high = Math.max(drag.startFreq, f);
     // Mindestbreite ~1/6 Oktave, damit das Band hörbar bleibt
     if (high < low * 1.12) high = low * 1.12;
-    onFilterChange({ low: Math.round(low), high: Math.round(Math.min(FREQ_MAX, high)) });
+    // Bänder dürfen sich nicht überlappen: die Auswahl bleibt in der
+    // freien Lücke um den Startpunkt und stoppt an fremden Bandgrenzen.
+    let gapLow = FREQ_MIN;
+    let gapHigh = FREQ_MAX;
+    for (let i = 0; i < bands.length; i++) {
+      if (i === selectedBand) continue;
+      const o = bands[i];
+      if (o.high <= drag.startFreq) gapLow = Math.max(gapLow, o.high);
+      else if (o.low >= drag.startFreq) gapHigh = Math.min(gapHigh, o.low);
+      else return; // Start liegt mitten in einem anderen Band — kein Platz
+    }
+    low = Math.max(low, gapLow);
+    high = Math.min(high, gapHigh);
+    if (high <= low * 1.01) return; // Lücke zu schmal für ein hörbares Band
+    onBandChange(selectedBand, { low: Math.round(low), high: Math.round(Math.min(FREQ_MAX, high)) });
   };
 
   const handlePointerUp = () => {
     const drag = dragRef.current;
     dragRef.current = null;
-    if (drag && !drag.moved) onFilterChange(null);
+    if (drag && !drag.moved) onBandsClear();
   };
 
   return (
@@ -354,10 +316,6 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
         </button>
         {open ? (
           <div className="abc-spectrum-tools">
-            <div className="abc-spec-toggle">
-              <button className={mode === "live" ? "on" : ""} onClick={() => setMode("live")}>Live</button>
-              <button className={mode === "diff" ? "on" : ""} onClick={() => setMode("diff")}>Difference A−B</button>
-            </div>
             <div className="abc-spec-toggle" title="Smoothing — how much detail the curve shows">
               {SMOOTHING_LEVELS.map((lvl) => (
                 <button
@@ -369,20 +327,14 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
                 </button>
               ))}
             </div>
-            {mode === "live" ? (
-              <div className="abc-spectrum-legend">
-                <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
-                  <span className="dot" style={{ background: "#f2a93b" }} />A · Mix
-                </span>
-                <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
-                  <span className="dot" style={{ background: "#5fbfb3" }} />B · Reference
-                </span>
-              </div>
-            ) : (
-              <div className="abc-spectrum-legend">
-                <span>Avg. spectrum, loudness-matched</span>
-              </div>
-            )}
+            <div className="abc-spectrum-legend">
+              <span style={{ opacity: active === "A" ? 1 : 0.45 }}>
+                <span className="dot" style={{ background: "#f2a93b" }} />A · Mix
+              </span>
+              <span style={{ opacity: active === "B" ? 1 : 0.45 }}>
+                <span className="dot" style={{ background: "#5fbfb3" }} />B · Reference
+              </span>
+            </div>
           </div>
         ) : (
           <div className="abc-meta-hint">Click to expand</div>
@@ -399,10 +351,28 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
           />
-          <div className="abc-eq-hint">
-            {filterBand
-              ? `Frequency focus ${formatHz(filterBand.low)} – ${formatHz(filterBand.high)}: only this range is audible. Click the spectrum to reset.`
-              : "Drag across the spectrum to hear only a frequency range of both tracks."}
+          <div className="abc-band-row">
+            <div className="abc-spec-toggle">
+              {bands.map((b, i) => (
+                <button
+                  key={i}
+                  className={`${b.active ? "on" : ""} ${selectedBand === i ? "sel" : ""}`}
+                  onClick={() => { setSelectedBand(i); onBandToggle(i); }}
+                  title="Click: enable/disable this band · drag on the spectrum to redefine it (bands can't overlap)"
+                >
+                  <span
+                    className="band-dot"
+                    style={{ background: BAND_COLORS[i], opacity: b.active ? 1 : 0.35 }}
+                  />
+                  {`${i + 1} · ${formatHz(b.low)}–${formatHz(b.high)}`}
+                </button>
+              ))}
+            </div>
+            <div className="abc-eq-hint">
+              {bands.some((b) => b.active)
+                ? `Only active bands are audible · drag to reshape band ${selectedBand + 1} · click the spectrum to disable all`
+                : `Toggle a band to hear only that range · drag on the spectrum to set band ${selectedBand + 1}`}
+            </div>
           </div>
         </>
       )}

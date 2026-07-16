@@ -91,6 +91,13 @@
 .abc-drag-panel.dragging{ opacity:0.35; }
 .abc-drag-panel.dragging *{ pointer-events:none; }
 .abc-eq-hint{ font-family:var(--mono); font-size:11px; color:var(--text-muted); padding:8px 2px 0; line-height:1.6; }
+.abc-band-row{ display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-top:10px; }
+/* Ausgewähltes Band (Ziel des Spektrum-Drags) bekommt eine sichtbare Kante */
+.abc-spec-toggle button.sel{ border-color:var(--text-muted); }
+.abc-spec-toggle .band-dot{
+  display:inline-block; width:8px; height:8px; border-radius:50%;
+  margin-right:6px; vertical-align:-1px;
+}
 
 .abc-switch-zone{ display:flex; flex-direction:column; align-items:center; gap:12px; margin-bottom:30px; }
 .abc-switch{
@@ -130,9 +137,7 @@
 }
 .abc-play-btn:hover{ background:rgba(242,169,59,0.12); }
 .abc-play-btn svg{ width:16px; height:16px; }
-.abc-time{ font-family:var(--mono); font-size:12px; color:var(--text-muted); min-width:84px; }
-.abc-seek{ flex:1; height:4px; background:var(--border); border-radius:2px; position:relative; cursor:pointer; }
-.abc-seek-fill{ position:absolute; top:0; left:0; height:100%; background:var(--amber-dim); border-radius:2px; width:0%; }
+.abc-transport-hint{ font-family:var(--mono); font-size:12px; color:var(--text-muted); }
 
 .abc-reset-row{ text-align:center; }
 .abc-reset-btn{

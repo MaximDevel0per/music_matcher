@@ -1,27 +1,11 @@
-import React, { useRef, useEffect } from "react";
-import { formatTime } from "../lib/format.js";
+import React from "react";
 
-export default function Transport({ isPlaying, duration, onToggle, onSeek, getCurrentOffset, subscribeFrame }) {
-  const seekTrackRef = useRef(null);
-  const fillRef = useRef(null);
-  const labelRef = useRef(null);
-
-  useEffect(() => {
-    const updateDom = (offset) => {
-      const pct = duration > 0 ? (offset / duration) * 100 : 0;
-      if (fillRef.current) fillRef.current.style.width = pct + "%";
-      if (labelRef.current) labelRef.current.textContent = `${formatTime(offset)} / ${formatTime(duration)}`;
-    };
-    updateDom(getCurrentOffset());
-    return subscribeFrame(updateDom);
-  }, [duration, subscribeFrame, getCurrentOffset]);
-
-  const handleSeekClick = (e) => {
-    const rect = seekTrackRef.current.getBoundingClientRect();
-    const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    onSeek(pct * duration);
-  };
-
+/**
+ * Nur Play/Pause: Eine gemeinsame Zeitanzeige/Fortschrittsleiste ergibt
+ * keinen Sinn, weil beide Tracks durch unabhängige Loops an verschiedenen
+ * Stellen spielen können — die Position zeigt jede Waveform-Spur selbst.
+ */
+export default function Transport({ isPlaying, onToggle }) {
   return (
     <div className="abc-transport">
       <button className="abc-play-btn" onClick={onToggle} aria-label="Play/Pause">
@@ -31,10 +15,8 @@ export default function Transport({ isPlaying, duration, onToggle, onSeek, getCu
             : <path d="M8 5v14l11-7z" />}
         </svg>
       </button>
-      <div className="abc-time" ref={labelRef}>0:00 / {formatTime(duration)}</div>
-      <div className="abc-seek" ref={seekTrackRef} onClick={handleSeekClick}>
-        <div className="abc-seek-fill" ref={fillRef} />
-      </div>
+      <div className="abc-transport-hint">{isPlaying ? "Pause" : "Play"} both tracks</div>
     </div>
   );
 }
+ 
