@@ -283,7 +283,7 @@ export default function StereoAnalyzer({ getStereoTaps, active, isPlaying, filte
   return (
     <div className={`abc-spectrum-box ${open ? "" : "collapsed"}`}>
       <div className="abc-spectrum-head">
-        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open} title="Drag to reorder">
           <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
           Stereo Image{filterBand ? ` · ${formatHz(filterBand.low)} – ${formatHz(filterBand.high)}` : ""}
         </button>

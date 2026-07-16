@@ -8,11 +8,11 @@ const PLOT_H = 170;
  * LUFS-Matching korrigiert — so sieht man, wo die Referenz dichter
  * arbeitet als der Mix, nicht bloß den Gesamtpegel-Unterschied.
  */
-export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, active, subscribeFrame, getCurrentOffset, onSeek }) {
+export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, active, subscribeFrame, getPositions, onSeek }) {
   const canvasRef = useRef(null);
   const [open, setOpen] = useState(true);
 
-  const draw = useCallback((offset) => {
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !loudA || !loudB || duration <= 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -86,23 +86,37 @@ export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, ac
       drawCurve(loudB, offB, "#5fbfb3", true);
     }
 
-    // Playhead
-    ctx.fillStyle = "#edeae3";
-    ctx.fillRect((offset / duration) * w - 1, 0, 2, h);
-  }, [loudA, loudB, lufsA, lufsB, duration, active]);
+    // Zwei Playheads in den Track-Farben: durch unabhängige Loops können
+    // beide Songs an verschiedenen Stellen stehen. Der aktive (hörbare)
+    // Track liegt obenauf und ist kräftiger.
+    const positions = getPositions();
+    const drawHead = (t, color, isActive) => {
+      if (!(t >= 0 && t <= duration)) return;
+      ctx.globalAlpha = isActive ? 0.95 : 0.45;
+      ctx.fillStyle = color;
+      ctx.fillRect((t / duration) * w - 1, 0, 2, h);
+      ctx.globalAlpha = 1;
+    };
+    if (active === "A") {
+      drawHead(positions.b, "#5fbfb3", false);
+      drawHead(positions.a, "#f2a93b", true);
+    } else {
+      drawHead(positions.a, "#f2a93b", false);
+      drawHead(positions.b, "#5fbfb3", true);
+    }
+  }, [loudA, loudB, lufsA, lufsB, duration, active, getPositions]);
 
   useEffect(() => {
-    draw(getCurrentOffset());
+    draw();
     return subscribeFrame(draw);
     // `open` als Dependency: nach dem Aufklappen wird der neu
     // eingehängte Canvas sofort einmal gezeichnet.
-  }, [draw, subscribeFrame, getCurrentOffset, open]);
+  }, [draw, subscribeFrame, open]);
 
   useEffect(() => {
-    const handleResize = () => draw(getCurrentOffset());
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [draw, getCurrentOffset]);
+    window.addEventListener("resize", draw);
+    return () => window.removeEventListener("resize", draw);
+  }, [draw]);
 
   const handleClick = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -113,7 +127,7 @@ export default function LoudnessGraph({ loudA, loudB, lufsA, lufsB, duration, ac
   return (
     <div className={`abc-spectrum-box ${open ? "" : "collapsed"}`}>
       <div className="abc-spectrum-head">
-        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open} title="Drag to reorder">
           <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
           Loudness Over Time
         </button>

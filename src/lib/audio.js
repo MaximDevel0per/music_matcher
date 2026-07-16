@@ -55,19 +55,33 @@ export async function measureLoudness(buffer) {
 
   const integrated = toLufs(cum[len], len * channels);
 
-  const windowLen = Math.min(len, Math.round(3 * targetRate));
-  const hopLen = Math.max(1, Math.round(0.5 * targetRate));
-  const shortTerm = [];
-  for (let start = 0; start + windowLen <= len; start += hopLen) {
-    shortTerm.push(toLufs(cum[start + windowLen] - cum[start], windowLen * channels));
-  }
-  if (shortTerm.length === 0) shortTerm.push(integrated);
+  // Verlauf über gleitendes Fenster — dank Präfixsummen O(1) pro Schritt
+  const series = (windowSec, hopSec) => {
+    const windowLen = Math.min(len, Math.round(windowSec * targetRate));
+    const hopLen = Math.max(1, Math.round(hopSec * targetRate));
+    const out = [];
+    for (let start = 0; start + windowLen <= len; start += hopLen) {
+      out.push(toLufs(cum[start + windowLen] - cum[start], windowLen * channels));
+    }
+    if (out.length === 0) out.push(integrated);
+    return {
+      values: Float32Array.from(out),
+      hopSec: hopLen / targetRate,
+      windowSec: windowLen / targetRate,
+    };
+  };
+
+  const st = series(3, 0.5); // Short-term: 3-s-Fenster
+  const mom = series(0.4, 0.1); // Momentary: 400-ms-Fenster
 
   return {
     integrated,
-    shortTerm: Float32Array.from(shortTerm),
-    hopSec: hopLen / targetRate,
-    windowSec: windowLen / targetRate,
+    shortTerm: st.values,
+    hopSec: st.hopSec,
+    windowSec: st.windowSec,
+    momentary: mom.values,
+    momHopSec: mom.hopSec,
+    momWindowSec: mom.windowSec,
   };
 }
 

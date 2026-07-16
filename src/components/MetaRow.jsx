@@ -68,6 +68,7 @@ export default function MetaRow({ metaA, metaB, lufsA, lufsB }) {
         className="abc-meta-head abc-meta-toggle"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
+        title="Drag to reorder"
       >
         <div className="abc-spectrum-title">
           <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>

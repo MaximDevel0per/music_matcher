@@ -127,10 +127,20 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
     if (!drag) return;
     if (!drag.moved && Math.abs(e.clientX - drag.startX) < DRAG_THRESHOLD_PX) return;
     drag.moved = true;
-    const pct = pctFromEvent(e);
-    const t1 = drag.startPct * duration;
-    const t2 = pct * duration;
-    dragSelRef.current = { start: Math.min(t1, t2), end: Math.max(t1, t2), lane: drag.lane };
+    const anchor = drag.startPct * duration;
+    const t = pctFromEvent(e) * duration;
+    // Loopt die andere Spur bereits, bekommt die Auswahl exakt deren Länge —
+    // gleich lange Loops kreisen synchron. Die Auswahl wird dann zum Fenster
+    // fester Breite, dessen vordere Kante dem Zeiger folgt.
+    const otherLoop = trackLoops?.[drag.lane === "a" ? "b" : "a"];
+    if (otherLoop) {
+      const len = otherLoop.end - otherLoop.start;
+      let start = t >= anchor ? Math.max(anchor, t - len) : Math.min(anchor - len, t);
+      start = Math.min(Math.max(0, start), Math.max(0, duration - len));
+      dragSelRef.current = { start, end: start + len, lane: drag.lane };
+    } else {
+      dragSelRef.current = { start: Math.min(anchor, t), end: Math.max(anchor, t), lane: drag.lane };
+    }
     draw();
   };
 
@@ -165,7 +175,7 @@ export default function Waveform({ peaksA, peaksB, active, duration, subscribeFr
       />
       <div className="abc-wave-hint">
         <span>
-          Drag on the reference: loop that section · Click a track: jump there · Double-click: clear loops
+          Drag on a track: loop that section (a second loop locks to the first one's length and runs in sync) · Click: jump there · Double-click: clear loops
         </span>
         <span style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           {trackLoops?.a && (

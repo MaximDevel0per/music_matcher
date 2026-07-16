@@ -354,9 +354,20 @@ export function useABCompare() {
     setTrackLoopsState({ ...loopsRef.current });
     const base = playStateRef.current.base;
     if (region) {
-      // Liegt die aktuelle Position in der Region, dort weiterlaufen,
-      // sonst am Regionsstart beginnen
-      base[which] = absPos >= region.start && absPos < region.end ? absPos - region.start : 0;
+      const other = which === "a" ? "b" : "a";
+      const otherLoop = loopsRef.current[other];
+      const len = region.end - region.start;
+      if (otherLoop && Math.abs(otherLoop.end - otherLoop.start - len) < 0.01) {
+        // Gleich lange Loops: Phase des anderen Tracks übernehmen —
+        // beide Regionen starten im selben Moment und bleiben synchron
+        base[which] = base[other];
+      } else if (absPos >= region.start && absPos < region.end) {
+        // Liegt die aktuelle Position in der Region, dort weiterlaufen
+        base[which] = absPos - region.start;
+      } else {
+        // sonst am Regionsstart beginnen
+        base[which] = 0;
+      }
     } else {
       // Loop aufgehoben: ab der aktuellen Stelle frei weiterlaufen
       base[which] = Math.min(Math.max(0, absPos), duration);

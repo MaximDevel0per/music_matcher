@@ -9,11 +9,49 @@ import ABSwitch from "./components/ABSwitch.jsx";
 import Waveform from "./components/Waveform.jsx";
 import LoudnessGraph from "./components/LoudnessGraph.jsx";
 import Transport from "./components/Transport.jsx";
+import DraggablePanel from "./components/DraggablePanel.jsx";
+
+const PANEL_IDS = ["lufs", "meta", "loudness", "spectrum", "stereo"];
+const ORDER_STORAGE_KEY = "abc-panel-order";
+
+// Gespeicherte Reihenfolge laden; unbekannte IDs verwerfen,
+// neue (noch nicht gespeicherte) Panels hinten anhängen.
+function loadPanelOrder() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ORDER_STORAGE_KEY) ?? "[]");
+    if (Array.isArray(saved)) {
+      const valid = saved.filter((id) => PANEL_IDS.includes(id));
+      if (valid.length) return [...valid, ...PANEL_IDS.filter((id) => !valid.includes(id))];
+    }
+  } catch {
+    // defekter Eintrag — Standardreihenfolge verwenden
+  }
+  return PANEL_IDS;
+}
 
 export default function App() {
   const engine = useABCompare();
   const [fileA, setFileA] = useState(null);
   const [fileB, setFileB] = useState(null);
+  const [panelOrder, setPanelOrder] = useState(loadPanelOrder);
+  const [dragId, setDragId] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(panelOrder));
+  }, [panelOrder]);
+
+  // Beim Ziehen über ein anderes Panel rückt das gezogene an dessen Position
+  const movePanel = (targetId) => {
+    setPanelOrder((order) => {
+      const from = order.indexOf(dragId);
+      const to = order.indexOf(targetId);
+      if (from === -1 || to === -1 || from === to) return order;
+      const next = [...order];
+      next.splice(from, 1);
+      next.splice(to, 0, dragId);
+      return next;
+    });
+  };
 
   // Leertaste schaltet global zwischen Mix und Referenz um
   useEffect(() => {
@@ -29,6 +67,61 @@ export default function App() {
 
   const hasAudio = engine.bufferA || engine.bufferB;
   const showCompare = engine.bufferA && engine.bufferB;
+
+  const panels = {
+    lufs: (
+      <LufsRow
+        lufsA={engine.lufsA}
+        lufsB={engine.lufsB}
+        loudA={engine.loudA}
+        loudB={engine.loudB}
+        getPositions={engine.getPositions}
+        subscribeFrame={engine.subscribeFrame}
+      />
+    ),
+    meta: (
+      <MetaRow
+        metaA={engine.metaA}
+        metaB={engine.metaB}
+        lufsA={engine.lufsA}
+        lufsB={engine.lufsB}
+      />
+    ),
+    loudness: (
+      <LoudnessGraph
+        loudA={engine.loudA}
+        loudB={engine.loudB}
+        lufsA={engine.lufsA}
+        lufsB={engine.lufsB}
+        duration={engine.duration}
+        active={engine.active}
+        subscribeFrame={engine.subscribeFrame}
+        getPositions={engine.getPositions}
+        onSeek={engine.seek}
+      />
+    ),
+    spectrum: (
+      <SpectrumAnalyzer
+        getAnalysers={engine.getAnalysers}
+        active={engine.active}
+        isPlaying={engine.isPlaying}
+        avgA={engine.metaA?.avgSpectrum}
+        avgB={engine.metaB?.avgSpectrum}
+        lufsA={engine.lufsA}
+        lufsB={engine.lufsB}
+        filterBand={engine.filterBand}
+        onFilterChange={engine.setFilterBand}
+      />
+    ),
+    stereo: (
+      <StereoAnalyzer
+        getStereoTaps={engine.getStereoTaps}
+        active={engine.active}
+        isPlaying={engine.isPlaying}
+        filterBand={engine.filterBand}
+      />
+    ),
+  };
 
   return (
     <div className="abc-root">
@@ -87,44 +180,22 @@ export default function App() {
           </>
         )}
 
-        {/* 4. Analyse: Lautheit, Metadaten, Spektrum, Stereo */}
+        {/* 4. Analyse: Lautheit, Metadaten, Spektrum, Stereo —
+               per Drag & Drop am Panel-Titel frei anordenbar */}
         {showCompare && (
           <>
-            <LufsRow lufsA={engine.lufsA} lufsB={engine.lufsB} />
-            <MetaRow
-              metaA={engine.metaA}
-              metaB={engine.metaB}
-              lufsA={engine.lufsA}
-              lufsB={engine.lufsB}
-            />
-            <LoudnessGraph
-              loudA={engine.loudA}
-              loudB={engine.loudB}
-              lufsA={engine.lufsA}
-              lufsB={engine.lufsB}
-              duration={engine.duration}
-              active={engine.active}
-              subscribeFrame={engine.subscribeFrame}
-              getCurrentOffset={engine.getCurrentOffset}
-              onSeek={engine.seek}
-            />
-            <SpectrumAnalyzer
-              getAnalysers={engine.getAnalysers}
-              active={engine.active}
-              isPlaying={engine.isPlaying}
-              avgA={engine.metaA?.avgSpectrum}
-              avgB={engine.metaB?.avgSpectrum}
-              lufsA={engine.lufsA}
-              lufsB={engine.lufsB}
-              filterBand={engine.filterBand}
-              onFilterChange={engine.setFilterBand}
-            />
-            <StereoAnalyzer
-              getStereoTaps={engine.getStereoTaps}
-              active={engine.active}
-              isPlaying={engine.isPlaying}
-              filterBand={engine.filterBand}
-            />
+            {panelOrder.map((id) => (
+              <DraggablePanel
+                key={id}
+                id={id}
+                dragId={dragId}
+                onDragStart={setDragId}
+                onDragEnd={() => setDragId(null)}
+                onHover={movePanel}
+              >
+                {panels[id]}
+              </DraggablePanel>
+            ))}
 
             {/* 5. Zurücksetzen */}
             <div className="abc-reset-row">

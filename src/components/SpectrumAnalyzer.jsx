@@ -3,6 +3,32 @@ import { formatHz } from "../lib/format.js";
 
 const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
+// Feinheitsgrad: Glättung über die Frequenzachse in Oktavbruchteilen
+// (0 = ungefiltert). Standard bei RTA-Analyzern: 1/6 bzw. 1/3 Oktave.
+const SMOOTHING_LEVELS = [
+  { label: "Fine", octaves: 0 },
+  { label: "1/6 oct", octaves: 1 / 6 },
+  { label: "1/3 oct", octaves: 1 / 3 },
+];
+
+// Gleitender Mittelwert mit Radius r über ein dB-Array (Pixelraster).
+// Im Log-Maßstab entspricht ein fester Pixelradius einem konstanten
+// Oktavbruchteil — die Glättung wirkt also über alle Lagen gleich.
+function smoothArray(arr, r) {
+  if (r <= 0) return arr;
+  const n = arr.length;
+  const out = new Float32Array(n);
+  let sum = 0, count = 0;
+  for (let i = 0; i < Math.min(n, r + 1); i++) { sum += arr[i]; count++; }
+  for (let x = 0; x < n; x++) {
+    out[x] = sum / count;
+    const add = x + r + 1;
+    if (add < n) { sum += arr[add]; count++; }
+    const drop = x - r;
+    if (drop >= 0) { sum -= arr[drop]; count--; }
+  }
+  return out;
+}
 const GRID_FREQS = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
 const GRID_LABELS = { 100: "100", 1000: "1k", 10000: "10k" };
 const PLOT_H = 240;
@@ -13,6 +39,7 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const [mode, setMode] = useState("live");
+  const [smoothing, setSmoothing] = useState(0);
   const [open, setOpen] = useState(true);
   // Letzte FFT-Daten bleiben erhalten, damit das Bild bei Pause,
   // Resize oder A/B-Umschalten nicht auf Null zurückfällt.
@@ -34,6 +61,9 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
     const plotH = h - LABEL_H;
     const xForFreq = (f) => (Math.log(f / FREQ_MIN) / Math.log(FREQ_MAX / FREQ_MIN)) * w;
     const freqForX = (x) => FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, x / w);
+    // Glättungsradius in Pixeln aus dem gewählten Oktavbruchteil
+    const pxPerOct = w / Math.log2(FREQ_MAX / FREQ_MIN);
+    const smoothR = Math.round((pxPerOct * smoothing) / 2);
 
     // Frequenz-Raster
     ctx.font = "10px 'IBM Plex Mono', monospace";
@@ -77,6 +107,28 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
 
     function drawLive(ctx, w, plotH, freqForX) {
       const { a, b } = getAnalysers();
+      const refAnalyser = a || b;
+      const dbMin = refAnalyser ? refAnalyser.minDecibels : -90;
+      const dbMax = refAnalyser ? refAnalyser.maxDecibels : -10;
+      const yForDb = (db) => {
+        const t = Math.min(1, Math.max(0, (db - dbMin) / (dbMax - dbMin)));
+        return plotH - t * (plotH - 4);
+      };
+
+      // Pegel-Raster (Y-Achse): Linien alle 10 dB, Beschriftung alle 20 dB
+      ctx.textAlign = "left";
+      for (let db = Math.ceil(dbMin / 10) * 10; db <= dbMax; db += 10) {
+        const y = yForDb(db);
+        ctx.fillStyle = "rgba(141,138,147,0.10)";
+        ctx.fillRect(0, y, w, 1);
+        if (db % 20 === 0) {
+          ctx.fillStyle = "rgba(141,138,147,0.55)";
+          ctx.fillText(`${db}`, 4, y - 3);
+        }
+      }
+      ctx.fillStyle = "rgba(141,138,147,0.7)";
+      ctx.fillText("dBFS", 4, 12);
+
       const readData = (analyser, key) => {
         if (!analyser) return null;
         if (isPlaying) {
@@ -93,18 +145,12 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
         if (!data) return;
         const sampleRate = analyser.context.sampleRate;
         const binHz = sampleRate / 2 / data.length;
-        const dbMin = analyser.minDecibels;
-        const dbMax = analyser.maxDecibels;
 
         // Pro Pixel den lautesten Bin im abgedeckten Frequenzbereich nehmen —
         // im Log-Maßstab decken hohe Pixel viele Bins ab, tiefe weniger als einen.
-        const yForDb = (db) => {
-          const t = Math.min(1, Math.max(0, (db - dbMin) / (dbMax - dbMin)));
-          return plotH - t * (plotH - 4);
-        };
-
-        ctx.beginPath();
-        ctx.moveTo(0, plotH);
+        // Kurve erst als Pixel-Array berechnen, damit der gewählte
+        // Feinheitsgrad (Glättung) darauf angewendet werden kann
+        const curve = new Float32Array(w + 1);
         for (let x = 0; x <= w; x++) {
           const f0 = freqForX(x);
           const f1 = freqForX(x + 1);
@@ -124,8 +170,14 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
             db = -Infinity;
             for (let i = i0; i < i1; i++) if (data[i] > db) db = data[i];
           }
-          ctx.lineTo(x, yForDb(db));
+          // -Infinity (leere Bins) würde die Glättung vergiften
+          curve[x] = Number.isFinite(db) ? db : dbMin;
         }
+        const smoothed = smoothArray(curve, smoothR);
+
+        ctx.beginPath();
+        ctx.moveTo(0, plotH);
+        for (let x = 0; x <= w; x++) ctx.lineTo(x, yForDb(smoothed[x]));
         ctx.lineTo(w, plotH);
         ctx.closePath();
         ctx.globalAlpha = isActive ? 0.22 : 0.08;
@@ -193,14 +245,9 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
                - sampleAvgDb(avgB, freqForX(x), freqForX(x + 1))
                + loudnessOffset;
       }
-      // Leichte Glättung über die Frequenzachse gegen FFT-Zappeln
-      const smooth = new Float32Array(w + 1);
-      const R = 2;
-      for (let x = 0; x <= w; x++) {
-        let s = 0, n = 0;
-        for (let k = Math.max(0, x - R); k <= Math.min(w, x + R); k++) { s += raw[k]; n++; }
-        smooth[x] = s / n;
-      }
+      // Glättung über die Frequenzachse: mindestens leicht (gegen
+      // FFT-Zappeln), sonst nach gewähltem Feinheitsgrad
+      const smooth = smoothArray(raw, Math.max(2, smoothR));
 
       const yForDiff = (d) => {
         const c = Math.min(DIFF_RANGE_DB, Math.max(-DIFF_RANGE_DB, d));
@@ -243,7 +290,7 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
-  }, [getAnalysers, active, isPlaying, mode, avgA, avgB, lufsA, lufsB, filterBand]);
+  }, [getAnalysers, active, isPlaying, mode, smoothing, avgA, avgB, lufsA, lufsB, filterBand]);
 
   // Animations-Loop nur im Live-Modus während der Wiedergabe; bei Pause
   // bleibt der letzte Frame stehen. Die Differenzansicht ist statisch.
@@ -301,7 +348,7 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
   return (
     <div className={`abc-spectrum-box ${open ? "" : "collapsed"}`}>
       <div className="abc-spectrum-head">
-        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <button type="button" className="abc-box-toggle" onClick={() => setOpen(!open)} aria-expanded={open} title="Drag to reorder">
           <span className={`abc-meta-chevron ${open ? "open" : ""}`}>▸</span>
           Frequency Spectrum
         </button>
@@ -310,6 +357,17 @@ export default function SpectrumAnalyzer({ getAnalysers, active, isPlaying, avgA
             <div className="abc-spec-toggle">
               <button className={mode === "live" ? "on" : ""} onClick={() => setMode("live")}>Live</button>
               <button className={mode === "diff" ? "on" : ""} onClick={() => setMode("diff")}>Difference A−B</button>
+            </div>
+            <div className="abc-spec-toggle" title="Smoothing — how much detail the curve shows">
+              {SMOOTHING_LEVELS.map((lvl) => (
+                <button
+                  key={lvl.label}
+                  className={smoothing === lvl.octaves ? "on" : ""}
+                  onClick={() => setSmoothing(lvl.octaves)}
+                >
+                  {lvl.label}
+                </button>
+              ))}
             </div>
             {mode === "live" ? (
               <div className="abc-spectrum-legend">
