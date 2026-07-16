@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { measureLoudness, computePeaks } from "../lib/audio.js";
+import { measureLoudness, computePeaks, sniffFormatInfo } from "../lib/audio.js";
 import { analyzeTrack } from "../lib/analysis.js";
 
 /**
@@ -185,7 +185,9 @@ export function useABCompare() {
       const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
       const loudness = await measureLoudness(buffer);
       const peaks = computePeaks(buffer, 600);
-      const meta = analyzeTrack(buffer, file);
+      // Echte Rate/Bit-Tiefe aus dem Datei-Header — der dekodierte
+      // Buffer ist bereits auf die Geräte-Rate resampelt
+      const meta = analyzeTrack(buffer, file, sniffFormatInfo(arrayBuffer));
 
       if (which === "A") {
         setBufferA(buffer);

@@ -10,6 +10,7 @@ import Waveform from "./components/Waveform.jsx";
 import LoudnessGraph from "./components/LoudnessGraph.jsx";
 import Transport from "./components/Transport.jsx";
 import DraggablePanel from "./components/DraggablePanel.jsx";
+import { GlowCard } from "@/components/ui/spotlight-card";
 
 const PANEL_IDS = ["lufs", "meta", "loudness", "spectrum", "stereo"];
 const ORDER_STORAGE_KEY = "abc-panel-order";
@@ -136,20 +137,26 @@ export default function App() {
 
         {/* 2. Dateien laden */}
         <div className="abc-upload-grid">
-          <Dropzone
-            label="Track A · Your Mix"
-            file={fileA}
-            buffer={engine.bufferA}
-            variant="a"
-            onFile={(f) => { setFileA(f); engine.loadFile(f, "A"); }}
-          />
-          <Dropzone
-            label="Track B · Reference"
-            file={fileB}
-            buffer={engine.bufferB}
-            variant="b"
-            onFile={(f) => { setFileB(f); engine.loadFile(f, "B"); }}
-          />
+          <GlowCard customSize glowColor="orange" className="abc-glow-wrap w-full">
+            <Dropzone
+              label="Track A · Your Mix"
+              file={fileA}
+              buffer={engine.bufferA}
+              sampleRate={engine.metaA?.sampleRate}
+              variant="a"
+              onFile={(f) => { setFileA(f); engine.loadFile(f, "A"); }}
+            />
+          </GlowCard>
+          <GlowCard customSize glowColor="green" className="abc-glow-wrap w-full">
+            <Dropzone
+              label="Track B · Reference"
+              file={fileB}
+              buffer={engine.bufferB}
+              sampleRate={engine.metaB?.sampleRate}
+              variant="b"
+              onFile={(f) => { setFileB(f); engine.loadFile(f, "B"); }}
+            />
+          </GlowCard>
         </div>
         <div className="abc-status">{engine.status}</div>
 

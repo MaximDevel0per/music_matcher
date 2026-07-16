@@ -180,8 +180,13 @@ export function analyzeStereo(buffer) {
   };
 }
 
-/** Bündelt alle Metadaten eines Tracks für die Anzeige */
-export function analyzeTrack(buffer, file) {
+/**
+ * Bündelt alle Metadaten eines Tracks für die Anzeige.
+ * fileInfo: { sampleRate, bitDepth } aus dem Datei-Header
+ * (buffer.sampleRate ist durch decodeAudioData bereits auf die
+ * Geräte-Rate resampelt; bitDepth nur bei PCM-Formaten).
+ */
+export function analyzeTrack(buffer, file, fileInfo) {
   const mono = mixToMono(buffer);
 
   let peak = 0;
@@ -199,7 +204,8 @@ export function analyzeTrack(buffer, file) {
     key: detectKey(mono, buffer.sampleRate),
     stereo: analyzeStereo(buffer),
     peakDb: peak > 0 ? 20 * Math.log10(peak) : -Infinity,
-    sampleRate: buffer.sampleRate,
+    sampleRate: fileInfo?.sampleRate || buffer.sampleRate,
+    bitDepth: fileInfo?.bitDepth || null,
     channels: buffer.numberOfChannels,
     duration: buffer.duration,
     format: ext,

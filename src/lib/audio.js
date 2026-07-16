@@ -85,6 +85,93 @@ export async function measureLoudness(buffer) {
   };
 }
 
+/**
+ * Liest Sample-Rate und Bit-Tiefe aus dem Datei-Header. Nötig, weil
+ * decodeAudioData alles auf die Rate des AudioContexts (= Audiogerät,
+ * oft 48 kHz) resampelt — buffer.sampleRate ist also NICHT die Rate
+ * der Datei. Unterstützt WAV, FLAC, OGG (Vorbis/Opus) und MP3.
+ * bitDepth gibt es nur bei PCM-Formaten (WAV/FLAC); verlustbehaftete
+ * Codecs haben keine feste Bit-Tiefe → null.
+ */
+export function sniffFormatInfo(arrayBuffer) {
+  const dv = new DataView(arrayBuffer);
+  const tag = (off, s) => {
+    if (off + s.length > dv.byteLength) return false;
+    for (let i = 0; i < s.length; i++) {
+      if (dv.getUint8(off + i) !== s.charCodeAt(i)) return false;
+    }
+    return true;
+  };
+  const none = { sampleRate: null, bitDepth: null };
+  try {
+    // WAV: RIFF….WAVE, dann Chunk-Liste bis "fmt "
+    if (tag(0, "RIFF") && tag(8, "WAVE")) {
+      let off = 12;
+      while (off + 8 <= dv.byteLength) {
+        const size = dv.getUint32(off + 4, true);
+        if (tag(off, "fmt ")) {
+          return {
+            sampleRate: dv.getUint32(off + 12, true),
+            bitDepth: dv.getUint16(off + 22, true), // bitsPerSample
+          };
+        }
+        off += 8 + size + (size & 1);
+      }
+      return none;
+    }
+    // FLAC: "fLaC", STREAMINFO-Block (Typ 0): Sample-Rate 20 Bit ab Byte 10,
+    // danach 3 Bit Kanäle−1 und 5 Bit Bit-Tiefe−1
+    if (tag(0, "fLaC")) {
+      let off = 4;
+      while (off + 4 <= dv.byteLength) {
+        const header = dv.getUint32(off);
+        const type = (header >>> 24) & 0x7f;
+        const size = header & 0xffffff;
+        if (type === 0) {
+          const b = off + 4 + 10;
+          return {
+            sampleRate: (dv.getUint8(b) << 12) | (dv.getUint8(b + 1) << 4) | (dv.getUint8(b + 2) >> 4),
+            bitDepth: (((dv.getUint8(b + 2) & 1) << 4) | (dv.getUint8(b + 3) >> 4)) + 1,
+          };
+        }
+        if (header >>> 31) break; // letzter Metadaten-Block
+        off += 4 + size;
+      }
+      return none;
+    }
+    // OGG: Identification-Header (Vorbis bzw. Opus) in der ersten Page.
+    // Bei Opus ist es die ursprüngliche Input-Rate — dekodiert wird immer 48k.
+    if (tag(0, "OggS")) {
+      const lim = Math.min(dv.byteLength - 16, 300);
+      for (let i = 0; i < lim; i++) {
+        if (tag(i, "\x01vorbis")) return { sampleRate: dv.getUint32(i + 12, true), bitDepth: null };
+        if (tag(i, "OpusHead")) return { sampleRate: dv.getUint32(i + 12, true), bitDepth: null };
+      }
+      return none;
+    }
+    // MP3: optionalen ID3v2-Tag überspringen, ersten Frame-Sync suchen
+    let off = 0;
+    if (tag(0, "ID3")) {
+      const size = (dv.getUint8(6) << 21) | (dv.getUint8(7) << 14) | (dv.getUint8(8) << 7) | dv.getUint8(9);
+      off = 10 + size;
+    }
+    // Sample-Raten je MPEG-Version (Index = Bits 3-2 in Byte 2 des Headers)
+    const RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+    const lim = Math.min(dv.byteLength - 4, off + 65536);
+    for (; off < lim; off++) {
+      if (dv.getUint8(off) === 0xff && (dv.getUint8(off + 1) & 0xe0) === 0xe0) {
+        const version = (dv.getUint8(off + 1) >> 3) & 3;
+        const rateBits = (dv.getUint8(off + 2) >> 2) & 3;
+        if (rateBits === 3 || !RATES[version]) continue;
+        return { sampleRate: RATES[version][rateBits], bitDepth: null };
+      }
+    }
+  } catch {
+    // defekter/abgeschnittener Header — Fallback greift
+  }
+  return none;
+}
+
 export function mixToMono(buffer) {
   const len = buffer.length;
   const out = new Float32Array(len);
