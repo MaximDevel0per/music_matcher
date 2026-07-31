@@ -30,30 +30,25 @@
 .abc-upload-grid{ display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:20px; }
 @media (max-width:640px){ .abc-upload-grid{ grid-template-columns:1fr; } }
 
+/* Slot = Dropzone + optionale Speichern-Zeile. Die Dropzone dehnt sich,
+   damit beide Spalten gleich hoch bleiben, auch wenn nur eine Seite
+   die Speichern-Zeile zeigt. */
+.abc-upload-slot{ display:flex; flex-direction:column; }
+.abc-upload-slot .abc-dropzone{ flex:1; display:flex; flex-direction:column; justify-content:center; }
+
 .abc-dropzone{
   border:1.5px dashed var(--border); border-radius:10px; background:var(--panel);
   padding:34px 20px; text-align:center; cursor:pointer;
   transition:border-color .15s ease, background .15s ease;
 }
 .abc-dropzone:hover, .abc-dropzone.dragover{ border-color:var(--amber-dim); background:var(--panel-raised); }
-/* GlowCard-Hülle um die Dropzones: die innere Karte füllt die Hülle.
-   Es gibt nur EINEN Rand — den der Glow-Hülle; die innere Karte bleibt
-   in jedem Zustand randlos, Feedback läuft über die Fläche. */
-.abc-glow-wrap{ padding:0; }
-.abc-glow-wrap .abc-dropzone{ height:100%; border-color:transparent; background:transparent; display:flex; flex-direction:column; justify-content:center; }
-.abc-glow-wrap .abc-dropzone:hover, .abc-glow-wrap .abc-dropzone.dragover{ border-color:transparent; background:rgba(237,234,227,0.04); }
 .abc-slot-label{ font-family:var(--mono); font-size:11px; letter-spacing:0.15em; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px; }
 .abc-slot-hint{ font-size:13px; color:var(--text-muted); }
 .abc-dropzone.loaded{ border-style:solid; text-align:left; }
 .abc-dropzone.loaded .abc-track-name{ font-weight:600; font-size:15px; margin-bottom:4px; word-break:break-word; }
 .abc-dropzone.loaded .abc-track-meta{ font-family:var(--mono); font-size:12px; color:var(--text-muted); }
-.abc-dz-a.loaded{ border-color:var(--amber-dim); }
-.abc-dz-b.loaded{ border-color:var(--teal); }
-/* In der GlowCard zeigt der geladene Zustand die Track-Farbe als
-   dezente Fläche statt als zweiten (versetzten) Rand */
-.abc-glow-wrap .abc-dropzone.loaded{ border-color:transparent; }
-.abc-glow-wrap .abc-dz-a.loaded{ background:rgba(242,169,59,0.06); }
-.abc-glow-wrap .abc-dz-b.loaded{ background:rgba(95,191,179,0.06); }
+.abc-dz-a.loaded{ border-color:var(--amber-dim); background:rgba(242,169,59,0.05); }
+.abc-dz-b.loaded{ border-color:var(--teal); background:rgba(95,191,179,0.05); }
 
 .abc-status{ font-family:var(--mono); font-size:12px; color:var(--text-muted); text-align:center; min-height:18px; margin-bottom:28px; }
 
@@ -167,3 +162,159 @@
 .abc-reset-btn:hover{ color:var(--text); border-color:var(--text-muted); }
 
 .abc-note{ font-family:var(--mono); font-size:11px; color:var(--text-muted); text-align:center; margin-top:28px; line-height:1.6; opacity:0.75; }
+
+/* --- Startseite für Besucher ohne Konto --- */
+.abc-landing{ text-align:center; padding:60px 0 20px; }
+.abc-landing .abc-eyebrow{ margin-bottom:18px; }
+.abc-landing-title{
+  font-size:52px; font-weight:700; letter-spacing:-0.03em; margin-bottom:18px;
+  display:flex; align-items:center; justify-content:center; gap:16px;
+}
+.abc-landing-title .abc-logo{ width:46px; height:46px; }
+/* Schmale Bildschirme: der Titel darf nicht zweizeilig neben dem Logo hängen */
+@media (max-width:520px){
+  .abc-landing{ padding-top:36px; }
+  .abc-landing-title{ font-size:34px; gap:11px; }
+  .abc-landing-title .abc-logo{ width:32px; height:32px; }
+  .abc-landing-lead{ font-size:15px; margin-bottom:28px; }
+}
+.abc-landing-lead{
+  color:var(--text-muted); font-size:17px; line-height:1.6;
+  max-width:520px; margin:0 auto 34px;
+}
+.abc-landing-cta{ display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+.abc-cta-main{ font-size:12px; padding:13px 26px; }
+.abc-landing-skip{ display:inline-block; margin-top:18px; text-decoration:none; }
+.abc-landing-skip:hover{ text-decoration:underline; }
+
+.abc-landing-features{
+  display:grid; grid-template-columns:repeat(3, 1fr); gap:16px;
+  margin:64px 0 0; text-align:left;
+}
+@media (max-width:760px){ .abc-landing-features{ grid-template-columns:1fr; } }
+.abc-landing-card{
+  background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px;
+}
+.abc-landing-card-title{
+  font-family:var(--mono); font-size:11px; letter-spacing:0.15em; text-transform:uppercase;
+  color:var(--amber); margin-bottom:10px;
+}
+.abc-landing-card p{ color:var(--text-muted); font-size:14px; line-height:1.65; }
+.abc-landing-note{
+  font-family:var(--mono); font-size:11px; color:var(--text-muted);
+  opacity:0.75; line-height:1.6; margin-top:34px;
+}
+
+/* --- Konto: Leiste oben rechts + Login/Register-Modal --- */
+/* min-height hält den Platz frei, solange die Sitzung geprüft wird */
+.abc-authbar{ display:flex; align-items:center; justify-content:flex-end; gap:10px; min-height:34px; margin-bottom:18px; }
+.abc-auth-user{
+  font-family:var(--mono); font-size:12px; color:var(--text-muted);
+  max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.abc-auth-btn{
+  font-family:var(--mono); font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+  color:var(--text-muted); background:none; border:1px solid var(--border); border-radius:6px;
+  padding:8px 15px; cursor:pointer; transition:color .15s ease, border-color .15s ease, background .15s ease;
+}
+.abc-auth-btn:hover{ color:var(--text); border-color:var(--text-muted); background:var(--panel-raised); }
+.abc-auth-btn.primary{ color:var(--amber); border-color:var(--amber-dim); }
+.abc-auth-btn.primary:hover{ color:var(--bg); background:var(--amber); border-color:var(--amber); }
+.abc-auth-btn:disabled{ opacity:0.5; cursor:default; }
+.abc-auth-btn:disabled:hover{ color:var(--amber); background:none; border-color:var(--amber-dim); }
+
+.abc-modal-backdrop{
+  position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+  padding:20px; background:rgba(10,10,12,0.72); backdrop-filter:blur(3px);
+}
+.abc-modal{
+  width:100%; max-width:380px; background:var(--panel); border:1px solid var(--border);
+  border-radius:12px; box-shadow:0 18px 50px rgba(0,0,0,0.5);
+}
+.abc-modal-head{ display:flex; align-items:center; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--border); }
+.abc-modal-title{ font-family:var(--mono); font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--amber); }
+.abc-modal-close{ display:flex; background:none; border:none; color:var(--text-muted); cursor:pointer; padding:2px; }
+.abc-modal-close:hover{ color:var(--text); }
+
+.abc-modal-body{ display:flex; flex-direction:column; gap:14px; padding:18px; }
+.abc-field{ display:flex; flex-direction:column; gap:6px; }
+.abc-field span{ font-family:var(--mono); font-size:10px; letter-spacing:0.15em; text-transform:uppercase; color:var(--text-muted); }
+.abc-field input{
+  font-family:var(--mono); font-size:13px; color:var(--text);
+  background:var(--bg); border:1px solid var(--border); border-radius:6px;
+  padding:10px 12px; outline:none; transition:border-color .15s ease;
+}
+.abc-field input:focus{ border-color:var(--amber-dim); }
+.abc-field-hint{ font-family:var(--mono); font-size:10px; color:var(--text-muted); opacity:0.75; margin-top:-6px; }
+.abc-form-error{
+  font-family:var(--mono); font-size:11px; line-height:1.5; color:#e8836f;
+  border:1px solid #6d3a30; border-radius:6px; background:rgba(232,131,111,0.08); padding:9px 11px;
+}
+.abc-submit{ margin-top:2px; padding:11px 15px; }
+
+.abc-modal-foot{
+  font-family:var(--mono); font-size:11px; color:var(--text-muted);
+  text-align:center; padding:0 18px 18px;
+}
+.abc-link-btn{
+  font-family:var(--mono); font-size:11px; color:var(--amber);
+  background:none; border:none; padding:0; cursor:pointer; text-decoration:underline;
+}
+.abc-link-btn:hover{ color:var(--text); }
+
+/* --- Bibliothek --- */
+.abc-save-row{ display:flex; gap:8px; margin-top:8px; }
+.abc-save-title{
+  flex:1; min-width:0;
+  font-family:var(--mono); font-size:12px; color:var(--text);
+  background:var(--bg); border:1px solid var(--border); border-radius:6px;
+  padding:8px 10px; outline:none; transition:border-color .15s ease;
+}
+.abc-save-title:focus{ border-color:var(--amber-dim); }
+.abc-save-title::placeholder{ color:var(--text-muted); opacity:0.6; }
+.abc-save-btn{
+  flex-shrink:0;
+  font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase;
+  color:var(--text-muted); background:none; border:1px solid var(--border); border-radius:6px;
+  padding:8px 12px; cursor:pointer; transition:color .15s ease, border-color .15s ease;
+}
+.abc-save-btn:hover:not(:disabled){ color:var(--text); border-color:var(--text-muted); }
+.abc-save-btn:disabled{ opacity:0.5; cursor:default; }
+
+.abc-library{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:26px; }
+.abc-library-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.abc-library-title{ font-family:var(--mono); font-size:11px; letter-spacing:0.15em; text-transform:uppercase; color:var(--text-muted); }
+.abc-library-count{ font-family:var(--mono); font-size:11px; color:var(--text-muted); opacity:0.7; }
+.abc-library-empty{ font-family:var(--mono); font-size:12px; color:var(--text-muted); opacity:0.75; padding:10px 2px; line-height:1.6; }
+.abc-library-list{ list-style:none; }
+.abc-library-row{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:10px 0; border-bottom:1px solid var(--border);
+}
+.abc-library-row:last-child{ border-bottom:none; }
+.abc-library-info{ min-width:0; }
+.abc-library-name{ font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:text; }
+.abc-library-edit{
+  width:100%; font-family:var(--display); font-size:14px; color:var(--text);
+  background:var(--bg); border:1px solid var(--amber-dim); border-radius:5px;
+  padding:3px 7px; outline:none;
+}
+.abc-library-edit:disabled{ opacity:0.6; }
+.abc-library-meta{ font-family:var(--mono); font-size:11px; color:var(--text-muted); margin-top:3px; }
+.abc-library-actions{ display:flex; gap:6px; flex-shrink:0; }
+.abc-lib-btn{
+  font-family:var(--mono); font-size:11px; letter-spacing:0.05em;
+  background:none; border:1px solid var(--border); border-radius:6px;
+  padding:6px 12px; cursor:pointer; color:var(--text-muted);
+  transition:color .15s ease, border-color .15s ease;
+}
+.abc-lib-btn.a:hover:not(:disabled){ color:var(--amber); border-color:var(--amber-dim); }
+.abc-lib-btn.b:hover:not(:disabled){ color:var(--teal); border-color:var(--teal); }
+.abc-lib-btn.edit{ font-size:13px; line-height:1; padding:6px 10px; }
+.abc-lib-btn.edit:hover:not(:disabled){ color:var(--text); border-color:var(--text-muted); }
+.abc-lib-btn.del{ font-size:15px; line-height:1; padding:5px 10px; }
+.abc-lib-btn.del:hover:not(:disabled){ color:#e8836f; border-color:#6d3a30; }
+/* Scharfgeschaltet: sichtbar anders als der erste Klick */
+.abc-lib-btn.danger{ color:#e8836f; border-color:#6d3a30; background:rgba(232,131,111,0.08); }
+.abc-lib-btn.danger:hover:not(:disabled){ color:var(--bg); background:#e8836f; border-color:#e8836f; }
+.abc-lib-btn:disabled{ opacity:0.5; cursor:default; }

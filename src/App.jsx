@@ -10,10 +10,22 @@ import Waveform from "./components/Waveform.jsx";
 import LoudnessGraph from "./components/LoudnessGraph.jsx";
 import Transport from "./components/Transport.jsx";
 import DraggablePanel from "./components/DraggablePanel.jsx";
-import { GlowCard } from "@/components/ui/spotlight-card";
+import AuthBar from "./components/AuthBar.jsx";
+import AuthModal from "./components/AuthModal.jsx";
+import Landing from "./components/Landing.jsx";
+import Library from "./components/Library.jsx";
+import { useAuth } from "./hooks/useAuth.js";
+import { useLibrary } from "./hooks/useLibrary.js";
 
 const PANEL_IDS = ["lufs", "meta", "loudness", "spectrum", "stereo"];
 const ORDER_STORAGE_KEY = "abc-panel-order";
+/**
+ * Merkt sich, dass jemand die Startseite übersprungen hat — sonst nervt sie
+ * bei jedem Reload. Bewusst sessionStorage statt localStorage: das Überspringen
+ * gilt nur für die laufende Sitzung. Wer wiederkommt, sieht wieder, worum es
+ * geht; eingeloggte Nutzer bekommen die Seite ohnehin nie zu sehen.
+ */
+const LANDING_STORAGE_KEY = "abc-landing-done";
 
 // Gespeicherte Reihenfolge laden; unbekannte IDs verwerfen,
 // neue (noch nicht gespeicherte) Panels hinten anhängen.
@@ -32,10 +44,70 @@ function loadPanelOrder() {
 
 export default function App() {
   const engine = useABCompare();
+  const auth = useAuth();
+  const library = useLibrary(!!auth.user);
   const [fileA, setFileA] = useState(null);
   const [fileB, setFileB] = useState(null);
   const [panelOrder, setPanelOrder] = useState(loadPanelOrder);
   const [dragId, setDragId] = useState(null);
+  /** "login", "register" oder null (Modal zu). */
+  const [authMode, setAuthMode] = useState(null);
+  /** true, sobald die Startseite übersprungen wurde (oder schon einmal wurde). */
+  const [enteredApp, setEnteredApp] = useState(
+    () => sessionStorage.getItem(LANDING_STORAGE_KEY) === "1",
+  );
+
+  const skipLanding = () => {
+    sessionStorage.setItem(LANDING_STORAGE_KEY, "1");
+    setEnteredApp(true);
+  };
+
+  // Startseite nur für Besucher ohne Konto, und erst wenn die gespeicherte
+  // Sitzung geprüft ist — sonst blitzt sie bei Eingeloggten kurz auf.
+  const showLanding = auth.ready && !auth.user && !enteredApp;
+  /** "A" | "B", solange der Upload dieses Slots läuft. */
+  const [savingSlot, setSavingSlot] = useState(null);
+  /** Vorgeschlagener Bibliotheksname je Slot, vom Nutzer änderbar. */
+  const [titleA, setTitleA] = useState("");
+  const [titleB, setTitleB] = useState("");
+
+  const setFile = (which) => (which === "A" ? setFileA : setFileB);
+  const setTitle = (which) => (which === "A" ? setTitleA : setTitleB);
+
+  /** Neue Datei im Slot: Titelvorschlag = Dateiname ohne Endung. */
+  const acceptFile = (file, which) => {
+    setFile(which)(file);
+    setTitle(which)(file.name.replace(/\.[^.]+$/, ""));
+    engine.loadFile(file, which);
+  };
+
+  /** Speichert die im Slot geladene Datei in der Bibliothek. */
+  const saveToLibrary = async (which) => {
+    const file = which === "A" ? fileA : fileB;
+    if (!file) return;
+    setSavingSlot(which);
+    try {
+      // Leer gelassen? Dann setzt das Backend den Dateinamen ohne Endung ein.
+      const title = (which === "A" ? titleA : titleB).trim();
+      await library.upload(file, title || undefined);
+    } catch {
+      // Fehlermeldung steht in library.error und wird in <Library> angezeigt
+    } finally {
+      setSavingSlot(null);
+    }
+  };
+
+  /** Lädt einen gespeicherten Track in Slot A oder B. */
+  const loadFromLibrary = async (track, which) => {
+    try {
+      const file = await library.download(track);
+      setFile(which)(file);
+      setTitle(which)(track.title);
+      engine.loadFile(file, which);
+    } catch {
+      // dito
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(panelOrder));
@@ -54,9 +126,13 @@ export default function App() {
     });
   };
 
-  // Leertaste schaltet global zwischen Mix und Referenz um
+  // Leertaste schaltet global zwischen Mix und Referenz um —
+  // außer beim Tippen in einem Eingabefeld, sonst käme dort nie ein
+  // Leerzeichen an (z.B. im Passwortfeld des Auth-Modals).
   useEffect(() => {
     const handleKey = (e) => {
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) return;
       if (e.code === "Space" && engine.bufferA && engine.bufferB) {
         e.preventDefault();
         engine.setActive(engine.active === "A" ? "B" : "A");
@@ -122,9 +198,41 @@ export default function App() {
     ),
   };
 
+  if (showLanding) {
+    return (
+      <div className="abc-root">
+        <div className="abc-wrap">
+          <Landing
+            onLogin={() => setAuthMode("login")}
+            onRegister={() => setAuthMode("register")}
+            onSkip={skipLanding}
+          />
+        </div>
+
+        {authMode && (
+          <AuthModal
+            mode={authMode}
+            onModeChange={setAuthMode}
+            onClose={() => setAuthMode(null)}
+            onSubmit={authMode === "register" ? auth.register : auth.login}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="abc-root">
       <div className="abc-wrap">
+        {/* 0. Konto */}
+        <AuthBar
+          user={auth.user}
+          ready={auth.ready}
+          onLogin={() => setAuthMode("login")}
+          onRegister={() => setAuthMode("register")}
+          onLogout={auth.logout}
+        />
+
         {/* 1. Kopf & Einleitung */}
         <div className="abc-header">
           <div className="abc-eyebrow">Mix ⇄ Reference</div>
@@ -137,28 +245,79 @@ export default function App() {
 
         {/* 2. Dateien laden */}
         <div className="abc-upload-grid">
-          <GlowCard customSize glowColor="orange" className="abc-glow-wrap w-full">
+          <div className="abc-upload-slot">
             <Dropzone
               label="Track A · Your Mix"
               file={fileA}
               buffer={engine.bufferA}
               sampleRate={engine.metaA?.sampleRate}
               variant="a"
-              onFile={(f) => { setFileA(f); engine.loadFile(f, "A"); }}
+              onFile={(f) => acceptFile(f, "A")}
             />
-          </GlowCard>
-          <GlowCard customSize glowColor="green" className="abc-glow-wrap w-full">
+            {auth.user && fileA && (
+              <div className="abc-save-row">
+                <input
+                  className="abc-save-title"
+                  value={titleA}
+                  onChange={(e) => setTitleA(e.target.value)}
+                  placeholder="Name in library"
+                  maxLength={200}
+                  aria-label="Name for track A in your library"
+                />
+                <button
+                  className="abc-save-btn"
+                  disabled={library.busy}
+                  onClick={() => saveToLibrary("A")}
+                >
+                  {savingSlot === "A" ? "Saving…" : "Save to library"}
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="abc-upload-slot">
             <Dropzone
               label="Track B · Reference"
               file={fileB}
               buffer={engine.bufferB}
               sampleRate={engine.metaB?.sampleRate}
               variant="b"
-              onFile={(f) => { setFileB(f); engine.loadFile(f, "B"); }}
+              onFile={(f) => acceptFile(f, "B")}
             />
-          </GlowCard>
+            {auth.user && fileB && (
+              <div className="abc-save-row">
+                <input
+                  className="abc-save-title"
+                  value={titleB}
+                  onChange={(e) => setTitleB(e.target.value)}
+                  placeholder="Name in library"
+                  maxLength={200}
+                  aria-label="Name for track B in your library"
+                />
+                <button
+                  className="abc-save-btn"
+                  disabled={library.busy}
+                  onClick={() => saveToLibrary("B")}
+                >
+                  {savingSlot === "B" ? "Saving…" : "Save to library"}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="abc-status">{engine.status}</div>
+
+        {/* Bibliothek nur für eingeloggte Nutzer — die Endpunkte sind geschützt */}
+        {auth.user && (
+          <Library
+            tracks={library.tracks}
+            loading={library.loading}
+            busy={library.busy}
+            error={library.error}
+            onLoad={loadFromLibrary}
+            onRemove={library.remove}
+            onRename={library.rename}
+          />
+        )}
 
         {/* 3. Wiedergabe: A/B-Umschalter, Transport, Wellenform */}
         {hasAudio && (
@@ -212,6 +371,15 @@ export default function App() {
           Not a certified broadcast loudness measurement — but precise enough for A/B comparison.
         </div>
       </div>
+
+      {authMode && (
+        <AuthModal
+          mode={authMode}
+          onModeChange={setAuthMode}
+          onClose={() => setAuthMode(null)}
+          onSubmit={authMode === "register" ? auth.register : auth.login}
+        />
+      )}
     </div>
   );
 }
