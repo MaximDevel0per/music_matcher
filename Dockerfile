@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-ARG NODE_VERSION=22-bookworm-slim
+# Node 24 wegen npm 11 — passend zu der npm-Version, die die Lockfiles erzeugt hat.
+ARG NODE_VERSION=24-bookworm-slim
 
 # ---------------------------------------------------------------------------
 # 1. Bauen
