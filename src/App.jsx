@@ -81,6 +81,38 @@ export default function App() {
     engine.loadFile(file, which);
   };
 
+  /** true, während die Beispiel-Tracks von der Landing Page geladen werden. */
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  /**
+   * Lädt die mitgelieferten Beispiel-Tracks in beide Slots: derselbe Loop,
+   * einmal sauber (Referenz), einmal mit typischen Mix-Fehlern. Statische
+   * Dateien aus public/ — funktioniert ohne Konto und ohne Backend.
+   */
+  const loadDemo = async () => {
+    setDemoLoading(true);
+    try {
+      const fetchDemo = async (path, name) => {
+        const res = await fetch(`${import.meta.env.BASE_URL}${path}`);
+        if (!res.ok) throw new Error(`Demo track missing: ${path}`);
+        return new File([await res.blob()], name, { type: "audio/mpeg" });
+      };
+      const [mix, ref] = await Promise.all([
+        fetchDemo("demo/demo-mix.mp3", "Demo Mix.mp3"),
+        fetchDemo("demo/demo-reference.mp3", "Demo Reference.mp3"),
+      ]);
+      // Erst wenn beide Dateien da sind, die Startseite verlassen —
+      // scheitert der Download, bleibt sie einfach stehen.
+      skipLanding();
+      acceptFile(mix, "A");
+      acceptFile(ref, "B");
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
   /** Speichert die im Slot geladene Datei in der Bibliothek. */
   const saveToLibrary = async (which) => {
     const file = which === "A" ? fileA : fileB;
@@ -206,6 +238,8 @@ export default function App() {
             onLogin={() => setAuthMode("login")}
             onRegister={() => setAuthMode("register")}
             onSkip={skipLanding}
+            onDemo={loadDemo}
+            demoLoading={demoLoading}
           />
         </div>
 

@@ -19,7 +19,7 @@ const FEATURES = [
  * Erste Seite für Besucher ohne Konto. Bewusst keine Sperre: der Vergleich
  * funktioniert auch ohne Anmeldung, ein Konto schaltet nur die Bibliothek frei.
  */
-export default function Landing({ onLogin, onRegister, onSkip }) {
+export default function Landing({ onLogin, onRegister, onSkip, onDemo, demoLoading }) {
   return (
     <div className="abc-landing">
       <div className="abc-eyebrow">Mix ⇄ Reference</div>
@@ -43,8 +43,14 @@ export default function Landing({ onLogin, onRegister, onSkip }) {
         </button>
       </div>
 
+      {/* Der schnellste Weg, das Tool zu verstehen: zwei mitgelieferte Tracks —
+          gleicher Loop, einmal sauber, einmal mit typischen Mix-Fehlern. */}
+      <button className="abc-demo-btn" onClick={onDemo} disabled={demoLoading}>
+        {demoLoading ? "Loading example tracks…" : "▶ Hear it in action — load example tracks"}
+      </button>
+
       <button className="abc-link-btn abc-landing-skip" onClick={onSkip}>
-        or try it without an account →
+        or try it with your own files →
       </button>
 
       <div className="abc-landing-features">
